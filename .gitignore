@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# ffmpeg binarios (pesan mucho, cada quien tiene el suyo)
+ffmpeg/
+
+# Temporales del proyecto
+_concat_list.txt
+
+# Tests manuales
+test_*.py
+
+# IDEs
+.vscode/
+.idea/
+
+# Windows
+Thumbs.db
+desktop.ini
