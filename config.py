@@ -7,6 +7,7 @@ ROOT_DIR = Path(__file__).parent.resolve()
 
 # Binario de ffmpeg dentro del proyecto
 FFMPEG_BIN = ROOT_DIR / "ffmpeg" / "ffmpeg.exe"
+FFPROBE_BIN = ROOT_DIR / "ffmpeg" / "ffprobe.exe"
 
 # ── Preferencias de usuario ───────────────────────────────────────────────────
 

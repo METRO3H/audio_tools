@@ -4,6 +4,8 @@ from config import APP_TITLE, APP_WIDTH, APP_HEIGHT, APPEARANCE, COLOR_THEME, FF
 from core.ffmpeg_runner import FFmpegRunner
 from ui.components.log_panel import LogPanel
 from ui.views.merge_audio_view import MergeAudioView
+from ui.views.diverge_audio_view import DivergeAudioView
+from ui.views.audio_to_video_view import AudioToVideoView
 
 
 class App(ctk.CTk):
@@ -29,5 +31,13 @@ class App(ctk.CTk):
         self.log_panel = LogPanel(self)
         self.log_panel.grid(row=1, column=0, sticky="nsew", padx=12, pady=(6, 12))
 
-        self.action_frame = MergeAudioView(self, runner=self._runner, on_log=self.log_panel.append)
-        self.action_frame.grid(row=0, column=0, sticky="nsew", padx=12, pady=(12, 6))
+        tabs = ctk.CTkTabview(self)
+        tabs.grid(row=0, column=0, sticky="nsew", padx=12, pady=(12, 6))
+
+        tabs.add("Merge")
+        tabs.add("Diverge")
+        tabs.add("Audio a Video")
+
+        MergeAudioView(tabs.tab("Merge"), runner=self._runner, on_log=self.log_panel.append).pack(fill="both", expand=True)
+        DivergeAudioView(tabs.tab("Diverge"), runner=self._runner, on_log=self.log_panel.append).pack(fill="both", expand=True)
+        AudioToVideoView(tabs.tab("Audio a Video"), runner=self._runner, on_log=self.log_panel.append).pack(fill="both", expand=True)

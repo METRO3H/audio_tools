@@ -52,6 +52,13 @@ class BaseActionView(ctk.CTkFrame):
             on_log=lambda line: self.after(0, lambda l=line: self._on_log(l)),
             on_done=lambda ok: self.after(0, lambda: on_done(ok)),
         )
+    def _execute_sequential(self, args_list: list[list[str]], on_done: Callable[[bool], None]):
+        self._set_run_btn_enabled(False)
+        self._runner.run_sequential(
+            args_list=args_list,
+            on_log=lambda line: self.after(0, lambda l=line: self._on_log(l)),
+            on_done=lambda ok: self.after(0, lambda: on_done(ok)),
+        )
 
     # ── Subclases implementan estos ───────────────────────────────────────────
 

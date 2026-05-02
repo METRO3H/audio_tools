@@ -4,19 +4,10 @@ from typing import Callable
 
 
 class FFmpegRunner:
-    """
-    Ejecuta comandos ffmpeg en un thread separado para no bloquear la UI.
-
-    Uso:
-        runner = FFmpegRunner(ffmpeg_path)
-        runner.run(args=["-i", "in.mp3", "out.mp3"], on_log=..., on_done=...)
-    """
 
     def __init__(self, ffmpeg_path: str):
         self._ffmpeg_path = str(ffmpeg_path)
         self._process: subprocess.Popen | None = None
-
-    # ── API pública ───────────────────────────────────────────────────────────
 
     def run(
         self,
@@ -24,14 +15,6 @@ class FFmpegRunner:
         on_log: Callable[[str], None],
         on_done: Callable[[bool], None],
     ) -> None:
-        """
-        Lanza ffmpeg con los argumentos dados.
-        Llama on_log(line) por cada línea de salida.
-        Llama on_done(success) al terminar.
-
-        Los callbacks se invocan desde el worker thread —
-        la UI debe usar .after() para actualizarse de forma segura.
-        """
         thread = threading.Thread(
             target=self._worker,
             args=(args, on_log, on_done),
@@ -39,45 +22,52 @@ class FFmpegRunner:
         )
         thread.start()
 
-    def cancel(self) -> None:
-        """Termina el proceso ffmpeg si está corriendo."""
-        if self._process and self._process.poll() is None:
-            self._process.terminate()
-
-    # ── Internals ─────────────────────────────────────────────────────────────
-
-    # Construye el comando y lanza ffmpeg como subproceso
-    # Lee la salida línea por línea mientras ffmpeg corre y avisa vía on_log
-    # Cuando termina, revisa el código de retorno y avisa vía on_done
-    def _worker(
+    def run_sequential(
         self,
-        args: list[str],
+        args_list: list[list[str]],
         on_log: Callable[[str], None],
         on_done: Callable[[bool], None],
     ) -> None:
-        cmd = [self._ffmpeg_path] + args
-        success = False
+        thread = threading.Thread(
+            target=self._sequential_worker,
+            args=(args_list, on_log, on_done),
+            daemon=True,
+        )
+        thread.start()
 
+    def cancel(self) -> None:
+        if self._process and self._process.poll() is None:
+            self._process.terminate()
+
+    def _run_single(self, args: list[str], on_log: Callable[[str], None]) -> bool:
+        cmd = [self._ffmpeg_path] + args
         try:
             self._process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,   # ffmpeg mezcla todo en stderr; lo unificamos
+                stderr=subprocess.STDOUT,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                creationflags=subprocess.CREATE_NO_WINDOW,  # no abre ventana negra en Windows
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
-
             for line in self._process.stdout:
                 on_log(line.rstrip())
-
             self._process.wait()
-            success = self._process.returncode == 0
-
+            return self._process.returncode == 0
         except Exception as e:
             on_log(f"[error] {e}")
-
+            return False
         finally:
             self._process = None
-            on_done(success)
+
+    def _worker(self, args, on_log, on_done):
+        on_done(self._run_single(args, on_log))
+
+    def _sequential_worker(self, args_list, on_log, on_done):
+        for i, args in enumerate(args_list, 1):
+            on_log(f"--- Parte {i}/{len(args_list)} ---")
+            if not self._run_single(args, on_log):
+                on_done(False)
+                return
+        on_done(True)
