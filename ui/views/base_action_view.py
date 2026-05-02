@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 from tkinter import filedialog
 from typing import Callable
@@ -15,8 +16,7 @@ class BaseActionView(ctk.CTkFrame):
         self._runner = runner
         self._on_log = on_log
         self._base_folder = DEFAULT_BASE_FOLDER
-
-    # ── Carpeta base ──────────────────────────────────────────────────────────
+        self._start_time: float | None = None
 
     def _build_base_folder_row(self, row: int):
         ctk.CTkLabel(self, text="Carpeta base").grid(row=row, column=0, padx=12, pady=(12, 4), sticky="w")
@@ -34,8 +34,6 @@ class BaseActionView(ctk.CTkFrame):
     def _on_base_folder_changed(self):
         pass
 
-    # ── Botón ejecutar ────────────────────────────────────────────────────────
-
     def _build_run_button(self, row: int, text: str = "Ejecutar"):
         self._run_btn = ctk.CTkButton(self, text=text, command=self._run, state="disabled")
         self._run_btn.grid(row=row, column=0, columnspan=3, padx=12, pady=12)
@@ -43,16 +41,17 @@ class BaseActionView(ctk.CTkFrame):
     def _set_run_btn_enabled(self, enabled: bool):
         self._run_btn.configure(state="normal" if enabled else "disabled")
 
-    # ── Ejecución ─────────────────────────────────────────────────────────────
-
     def _execute(self, args: list[str], on_done: Callable[[bool], None]):
+        self._start_time = time.monotonic()
         self._set_run_btn_enabled(False)
         self._runner.run(
             args=args,
             on_log=lambda line: self.after(0, lambda l=line: self._on_log(l)),
             on_done=lambda ok: self.after(0, lambda: on_done(ok)),
         )
+
     def _execute_sequential(self, args_list: list[list[str]], on_done: Callable[[bool], None]):
+        self._start_time = time.monotonic()
         self._set_run_btn_enabled(False)
         self._runner.run_sequential(
             args_list=args_list,
@@ -60,7 +59,20 @@ class BaseActionView(ctk.CTkFrame):
             on_done=lambda ok: self.after(0, lambda: on_done(ok)),
         )
 
-    # ── Subclases implementan estos ───────────────────────────────────────────
+    def _log_elapsed_time(self):
+        if self._start_time is None:
+            return
+        elapsed = int(time.monotonic() - self._start_time)
+        h = elapsed // 3600
+        m = (elapsed % 3600) // 60
+        s = elapsed % 60
+        parts = []
+        if h:
+            parts.append(f"{h}h")
+        if m:
+            parts.append(f"{m}min")
+        parts.append(f"{s}seg")
+        self._on_log(f"Tiempo transcurrido: {', '.join(parts)}")
 
     def _build(self):
         raise NotImplementedError

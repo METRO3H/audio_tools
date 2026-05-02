@@ -71,6 +71,7 @@ class AudioToVideoView(BaseActionView):
 
     def _finish(self, success: bool):
         self._set_run_btn_enabled(True)
+        self._log_elapsed_time()
         self._on_log("✓ Conversión completada." if success else "✗ Error en la conversión.")
 
     def _refresh_files_box(self):

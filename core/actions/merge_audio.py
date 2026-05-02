@@ -21,5 +21,7 @@ class MergeAudioAction:
             self._CONCAT_LIST.unlink()
 
     def _write_concat_list(self, files: list[Path]) -> None:
-        lines = [f"file '{f.as_posix()}'" for f in files]
+        def escape(path: Path) -> str:
+            return path.as_posix().replace("'", "'\\''")
+        lines = [f"file '{escape(f)}'" for f in files]
         self._CONCAT_LIST.write_text("\n".join(lines), encoding="utf-8")

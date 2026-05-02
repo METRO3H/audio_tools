@@ -82,4 +82,5 @@ class DivergeAudioView(BaseActionView):
 
     def _finish(self, success: bool):
         self._set_run_btn_enabled(True)
+        self._log_elapsed_time()
         self._on_log("✓ Diverge completado." if success else "✗ Error en el diverge.")

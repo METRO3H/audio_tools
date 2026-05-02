@@ -71,6 +71,7 @@ class MergeAudioView(BaseActionView):
     def _finish(self, success: bool):
         self._action.cleanup()
         self._set_run_btn_enabled(True)
+        self._log_elapsed_time()
         self._on_log("✓ Merge completado." if success else "✗ Error en el merge.")
 
     def _suggest_output_name(self):
