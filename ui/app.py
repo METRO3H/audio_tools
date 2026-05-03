@@ -6,6 +6,8 @@ from ui.components.log_panel import LogPanel
 from ui.views.merge_audio_view import MergeAudioView
 from ui.views.diverge_audio_view import DivergeAudioView
 from ui.views.audio_to_video_view import AudioToVideoView
+from ui.views.pipeline_view import PipelineView
+
 
 
 class App(ctk.CTk):
@@ -37,7 +39,9 @@ class App(ctk.CTk):
         tabs.add("Merge")
         tabs.add("Diverge")
         tabs.add("Audio a Video")
+        tabs.add("Pipeline")
 
         MergeAudioView(tabs.tab("Merge"), runner=self._runner, on_log=self.log_panel.append).pack(fill="both", expand=True)
         DivergeAudioView(tabs.tab("Diverge"), runner=self._runner, on_log=self.log_panel.append).pack(fill="both", expand=True)
         AudioToVideoView(tabs.tab("Audio a Video"), runner=self._runner, on_log=self.log_panel.append).pack(fill="both", expand=True)
+        PipelineView(tabs.tab("Pipeline"), runner=self._runner, on_log=self.log_panel.append).pack(fill="both", expand=True)

@@ -1,5 +1,4 @@
 from pathlib import Path
-
 from core.models import AudioToVideoConfig
 
 
@@ -12,6 +11,10 @@ class AudioToVideoAction:
             self._build_args(f, config.background_image, output_dir)
             for f in config.input_files
         ]
+
+    def get_output_files(self, config: AudioToVideoConfig) -> list[Path]:
+        output_dir = config.base_folder / "translation"
+        return [output_dir / f"{f.stem}.mp4" for f in config.input_files]
 
     def _build_args(self, audio: Path, image: Path | None, output_dir: Path) -> list[str]:
         output = output_dir / f"{audio.stem}.mp4"

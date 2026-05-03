@@ -44,3 +44,13 @@ class DivergeAudioAction:
             segments.append((n_full * interval, duration))
 
         return segments
+    
+    
+    def get_output_files(self, config: DivergeAudioConfig, duration: float) -> list[Path]:
+        segments = self._calculate_segments(duration, config.interval_seconds)
+        output_dir = config.base_folder / "parts"
+        folder_name = config.base_folder.name
+        return [
+            output_dir / f"[{i}] {folder_name}.{config.output_format}"
+            for i, _ in enumerate(segments, 1)
+        ]
