@@ -9,12 +9,12 @@ from ui.views.audio_to_video_view import AudioToVideoView
 from ui.views.pipeline_view import PipelineView
 
 
-
 class App(ctk.CTk):
 
     def __init__(self):
         super().__init__()
         self._runner = FFmpegRunner(FFMPEG_BIN)
+        self._logs_visible = False
         self._configure_window()
         self._build()
 
@@ -26,22 +26,23 @@ class App(ctk.CTk):
         self.minsize(APP_WIDTH, APP_HEIGHT)
 
     def _build(self):
-        self.grid_rowconfigure(0, weight=3)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
         self.log_panel = LogPanel(self)
-        self.log_panel.grid(row=1, column=0, sticky="nsew", padx=12, pady=(6, 12))
 
         tabs = ctk.CTkTabview(self)
-        tabs.grid(row=0, column=0, sticky="nsew", padx=12, pady=(12, 6))
+        tabs.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
 
         tabs.add("Merge")
         tabs.add("Diverge")
         tabs.add("Audio a Video")
         tabs.add("Pipeline")
 
-        MergeAudioView(tabs.tab("Merge"), runner=self._runner, on_log=self.log_panel.append).pack(fill="both", expand=True)
-        DivergeAudioView(tabs.tab("Diverge"), runner=self._runner, on_log=self.log_panel.append).pack(fill="both", expand=True)
-        AudioToVideoView(tabs.tab("Audio a Video"), runner=self._runner, on_log=self.log_panel.append).pack(fill="both", expand=True)
+        MergeAudioView(tabs.tab("Merge"), runner=self._runner, on_log=self.log_panel.append, on_toggle_logs=self.log_panel.toggle).pack(fill="both", expand=True)
+        DivergeAudioView(tabs.tab("Diverge"), runner=self._runner, on_log=self.log_panel.append, on_toggle_logs=self.log_panel.toggle).pack(fill="both", expand=True)
+        AudioToVideoView(tabs.tab("Audio a Video"), runner=self._runner, on_log=self.log_panel.append, on_toggle_logs=self.log_panel.toggle).pack(fill="both", expand=True)
         PipelineView(tabs.tab("Pipeline"), runner=self._runner, on_log=self.log_panel.append).pack(fill="both", expand=True)
+
+    def _toggle_logs(self):
+        self.log_panel.toggle()

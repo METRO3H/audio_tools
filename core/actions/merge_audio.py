@@ -19,7 +19,7 @@ class MergeAudioAction:
             "-safe", "0",
             "-i", str(self._CONCAT_LIST),
             "-i", str(self._METADATA_FILE),
-            "-map", "0",
+            "-map", "0:a",
             "-map_metadata", "1",
             str(config.output_file),
         ]
