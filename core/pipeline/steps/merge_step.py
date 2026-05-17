@@ -1,13 +1,19 @@
-from pathlib import Path
-from typing import Callable
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Callable
 
 import customtkinter as ctk
 
+from config import FFMPEG_BIN, FFPROBE_BIN
 from core.actions.merge_audio import MergeAudioAction
 from core.ffmpeg_runner import FFmpegRunner
+from core.media_info import get_duration
 from core.models import MergeAudioConfig
 from core.pipeline.base_step import BaseStep
 from core.pipeline.context import PipelineContext
+
+if TYPE_CHECKING:
+    from core.pipeline.step_hooks import StepProgressHooks
 
 FORMATS = ["mp3", "wav", "aac", "m4a", "ogg", "flac"]
 
@@ -59,23 +65,77 @@ class MergeStep(BaseStep):
         runner: FFmpegRunner,
         on_log: Callable[[str], None],
         on_done: Callable[[bool, PipelineContext], None],
+        hooks: "StepProgressHooks | None" = None,
     ) -> None:
-        name = self._output_name if self._output_name != "merged" else context.base_folder.name
+        name = (
+            self._output_name
+            if self._output_name != "merged"
+            else context.base_folder.name
+        )
         output_file = (
-            context.current_files[0].parent
-            / f"{name}.{self._output_format}"
+            context.current_files[0].parent / f"{name}.{self._output_format}"
         )
         config = MergeAudioConfig(
             input_files=context.current_files,
             output_file=output_file,
             base_folder=context.base_folder,
         )
-        args = self._action.build_args(config)
+
+        # Duraciones para progress tracking y para add_chapters al finalizar
+        durations = [get_duration(FFPROBE_BIN, f) for f in context.current_files]
+        duration_total = sum(durations)
+        filenames = [f.name for f in context.current_files]
+
+        args = self._action.build_args(config, on_log=on_log)   # ← mismo comando original
+
+        # ── Hooks ────────────────────────────────────────────────────
+        on_progress_cb = None
+
+        if hooks:
+            if hooks.on_setup:
+                hooks.on_setup(filenames, output_file.stem)
+            if hooks.on_file_active and filenames:
+                hooks.on_file_active(filenames[0])
+
+            current_idx = [0]
+
+            def on_progress_cb(value: float):
+                elapsed = value * duration_total
+                cumulative = 0.0
+                for i, (fname, dur) in enumerate(zip(filenames, durations)):
+                    if elapsed <= cumulative + dur:
+                        if i != current_idx[0]:
+                            for j in range(current_idx[0], i):
+                                if hooks.on_file_done:
+                                    hooks.on_file_done(filenames[j])
+                            current_idx[0] = i
+                            if hooks.on_file_active:
+                                hooks.on_file_active(fname)
+                        file_progress = (elapsed - cumulative) / dur if dur > 0 else 0
+                        if hooks.on_file_progress:
+                            hooks.on_file_progress(fname, file_progress)
+                        break
+                    cumulative += dur
+                if hooks.on_pipeline_progress:
+                    hooks.on_pipeline_progress(value)
+
+        # ── Ejecución ─────────────────────────────────────────────────
+        input_files_snapshot = list(context.current_files)   # copia antes de modificar
 
         def done(success: bool):
-            self._action.cleanup()
             if success:
+                # add_chapters corre en el worker thread: sin bloquear la UI
+                self._action.add_chapters(
+                    output_file, input_files_snapshot, durations, FFMPEG_BIN
+                )
                 context.current_files = [output_file]
+            self._action.cleanup()
             on_done(success, context)
 
-        runner.run(args=args, on_log=on_log, on_done=done)
+        runner.run(
+            args=args,
+            on_log=on_log,
+            on_done=done,
+            on_progress=on_progress_cb,
+            duration=duration_total,
+        )

@@ -1,4 +1,6 @@
-from typing import Callable
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Callable
 
 import customtkinter as ctk
 
@@ -9,6 +11,9 @@ from core.media_info import get_duration
 from core.models import DivergeAudioConfig
 from core.pipeline.base_step import BaseStep
 from core.pipeline.context import PipelineContext
+
+if TYPE_CHECKING:
+    from core.pipeline.step_hooks import StepProgressHooks
 
 FORMATS = ["mp3", "wav", "aac", "m4a", "ogg", "flac"]
 
@@ -59,21 +64,61 @@ class DivergeStep(BaseStep):
         runner: FFmpegRunner,
         on_log: Callable[[str], None],
         on_done: Callable[[bool, PipelineContext], None],
+        hooks: "StepProgressHooks | None" = None,
     ) -> None:
         input_file = context.current_files[0]
+        interval_seconds = self._interval_minutes * 60
         config = DivergeAudioConfig(
             input_file=input_file,
             base_folder=context.base_folder,
-            interval_seconds=self._interval_minutes * 60,
+            interval_seconds=interval_seconds,
             output_format=self._output_format,
         )
         duration = get_duration(FFPROBE_BIN, input_file)
         args_list = self._action.build_args_list(config, duration)
         output_files = self._action.get_output_files(config, duration)
+        part_durations = [
+            end - start
+            for start, end in self._action._calculate_segments(duration, interval_seconds)
+        ]
+        filenames = [f.name for f in output_files]
 
+        # ── Hooks: setup y callbacks de progreso ──────────────────────
+        if hooks and hooks.on_setup:
+            hooks.on_setup(filenames, input_file.stem)
+
+        active_idx = [0]
+
+        def on_file_start(i: int):
+            active_idx[0] = i
+            if hooks and hooks.on_file_active:
+                hooks.on_file_active(filenames[i])
+
+        def on_progress(value: float):
+            if hooks:
+                if hooks.on_file_progress:
+                    hooks.on_file_progress(filenames[active_idx[0]], value)
+                if hooks.on_pipeline_progress:
+                    hooks.on_pipeline_progress(
+                        (active_idx[0] + value) / len(output_files)
+                    )
+
+        def on_file_done_cb(i: int):
+            if hooks and hooks.on_file_done:
+                hooks.on_file_done(filenames[i])
+
+        # ── Ejecución ─────────────────────────────────────────────────
         def done(success: bool):
             if success:
                 context.current_files = output_files
             on_done(success, context)
 
-        runner.run_sequential(args_list=args_list, on_log=on_log, on_done=done)
+        runner.run_sequential(
+            args_list=args_list,
+            on_log=on_log,
+            on_done=done,
+            on_progress=on_progress if hooks else None,
+            on_file_start=on_file_start if hooks else None,
+            on_file_done=on_file_done_cb if hooks else None,
+            durations=part_durations,
+        )

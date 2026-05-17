@@ -39,10 +39,22 @@ class App(ctk.CTk):
         tabs.add("Audio a Video")
         tabs.add("Pipeline")
 
-        MergeAudioView(tabs.tab("Merge"), runner=self._runner, on_log=self.log_panel.append, on_toggle_logs=self.log_panel.toggle).pack(fill="both", expand=True)
-        DivergeAudioView(tabs.tab("Diverge"), runner=self._runner, on_log=self.log_panel.append, on_toggle_logs=self.log_panel.toggle).pack(fill="both", expand=True)
-        AudioToVideoView(tabs.tab("Audio a Video"), runner=self._runner, on_log=self.log_panel.append, on_toggle_logs=self.log_panel.toggle).pack(fill="both", expand=True)
-        PipelineView(tabs.tab("Pipeline"), runner=self._runner, on_log=self.log_panel.append).pack(fill="both", expand=True)
+        MergeAudioView(
+            tabs.tab("Merge"), runner=self._runner,
+            on_log=self.log_panel.append, on_toggle_logs=self.log_panel.toggle,
+        ).pack(fill="both", expand=True)
 
-    def _toggle_logs(self):
-        self.log_panel.toggle()
+        DivergeAudioView(
+            tabs.tab("Diverge"), runner=self._runner,
+            on_log=self.log_panel.append, on_toggle_logs=self.log_panel.toggle,
+        ).pack(fill="both", expand=True)
+
+        AudioToVideoView(
+            tabs.tab("Audio a Video"), runner=self._runner,
+            on_log=self.log_panel.append, on_toggle_logs=self.log_panel.toggle,
+        ).pack(fill="both", expand=True)
+
+        PipelineView(
+            tabs.tab("Pipeline"), runner=self._runner,
+            on_log=self.log_panel.append, on_toggle_logs=self.log_panel.toggle,
+        ).pack(fill="both", expand=True)

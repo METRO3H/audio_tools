@@ -4,7 +4,7 @@ from typing import Callable
 
 import customtkinter as ctk
 
-from config import FFPROBE_BIN
+from config import FFMPEG_BIN, FFPROBE_BIN
 from core.actions.merge_audio import MergeAudioAction
 from core.ffmpeg_runner import FFmpegRunner
 from core.media_info import get_duration
@@ -71,6 +71,9 @@ class MergeAudioView(BaseActionView):
         if not output_file:
             return
 
+        # ── CAMBIO: guardamos output_file para poder llamar add_chapters en _finish
+        self._output_file = output_file
+
         self._durations = [get_duration(FFPROBE_BIN, f) for f in self._selected_files]
         self._total_duration = sum(self._durations)
         self._current_file_index = 0
@@ -89,7 +92,7 @@ class MergeAudioView(BaseActionView):
 
         self._on_log("Iniciando merge...")
         self._execute(
-            args=self._action.build_args(config),
+            args=self._action.build_args(config),   # ← idéntico al original
             on_done=self._finish,
             on_progress=lambda v: self.after(0, lambda val=v: self._on_progress(val)),
             duration=self._total_duration,
@@ -107,15 +110,23 @@ class MergeAudioView(BaseActionView):
                     self._progress_panel.set_file_active(f.name)
                 file_progress = (elapsed - cumulative) / dur if dur > 0 else 0
                 self._progress_panel.set_file_progress(f.name, file_progress)
-                break
+                return
             cumulative += dur
 
     def _finish(self, success: bool):
-        self._action.cleanup()
         self._log_elapsed_time()
         if success:
             for f in self._selected_files:
                 self._progress_panel.set_file_done(f.name)
+
+            # ── CAMBIO: añadir chapters al archivo ya mergeado (rápido, -c copy)
+            self._action.add_chapters(
+                self._output_file,
+                self._selected_files,
+                self._durations,
+                FFMPEG_BIN,
+            )
+
             self._progress_panel.show_success(
                 "Merge completado exitosamente",
                 folder=self._base_folder,
@@ -128,7 +139,6 @@ class MergeAudioView(BaseActionView):
 
     def _reset(self):
         self._selected_files = []
-        self._output_name_entry.delete(0, "end")
         self._files_box.configure(state="normal")
         self._files_box.delete("1.0", "end")
         self._files_box.configure(state="disabled")
@@ -136,17 +146,7 @@ class MergeAudioView(BaseActionView):
         self._progress_panel.grid_remove()
         self._config_frame.grid()
 
-    def _suggest_output_name(self):
-        self._output_name_entry.delete(0, "end")
-        self._output_name_entry.insert(0, self._base_folder.name)
-
-    def _build_output_path(self) -> Path | None:
-        name = self._output_name_entry.get().strip()
-        if not name:
-            return None
-        fmt = self._format_selector.get()
-        folder = self._selected_files[0].parent
-        return folder / f"{name}.{fmt}"
+    # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _refresh_files_box(self):
         self._files_box.configure(state="normal")
@@ -154,3 +154,15 @@ class MergeAudioView(BaseActionView):
         for f in self._selected_files:
             self._files_box.insert("end", f.name + "\n")
         self._files_box.configure(state="disabled")
+
+    def _suggest_output_name(self):
+        if self._selected_files and not self._output_name_entry.get().strip():
+            self._output_name_entry.delete(0, "end")
+            self._output_name_entry.insert(0, self._base_folder.name)
+
+    def _build_output_path(self) -> Path | None:
+        if not self._selected_files:
+            return None
+        name = self._output_name_entry.get().strip() or self._base_folder.name
+        fmt = self._format_selector.get()
+        return self._selected_files[0].parent / f"{name}.{fmt}"

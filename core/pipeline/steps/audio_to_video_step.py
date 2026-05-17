@@ -1,14 +1,21 @@
+from __future__ import annotations
+
 from pathlib import Path
 from tkinter import filedialog
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import customtkinter as ctk
 
+from config import FFPROBE_BIN
 from core.actions.audio_to_video import AudioToVideoAction
 from core.ffmpeg_runner import FFmpegRunner
+from core.media_info import get_duration
 from core.models import AudioToVideoConfig
 from core.pipeline.base_step import BaseStep
 from core.pipeline.context import PipelineContext
+
+if TYPE_CHECKING:
+    from core.pipeline.step_hooks import StepProgressHooks
 
 
 class AudioToVideoStep(BaseStep):
@@ -44,7 +51,9 @@ class AudioToVideoStep(BaseStep):
                 self._background_image = Path(file)
                 img_label.configure(text=self._background_image.name)
 
-        ctk.CTkButton(modal, text="Elegir", width=90, command=pick).grid(row=0, column=2, padx=16, pady=(16, 8))
+        ctk.CTkButton(modal, text="Elegir", width=90, command=pick).grid(
+            row=0, column=2, padx=16, pady=(16, 8)
+        )
         ctk.CTkButton(modal, text="Cerrar", command=modal.destroy).grid(
             row=1, column=0, columnspan=3, padx=16, pady=16
         )
@@ -55,6 +64,7 @@ class AudioToVideoStep(BaseStep):
         runner: FFmpegRunner,
         on_log: Callable[[str], None],
         on_done: Callable[[bool, PipelineContext], None],
+        hooks: "StepProgressHooks | None" = None,
     ) -> None:
         config = AudioToVideoConfig(
             input_files=context.current_files,
@@ -62,8 +72,45 @@ class AudioToVideoStep(BaseStep):
             background_image=self._background_image,
         )
         args_list = self._action.build_args_list(config)
+        filenames = [f.name for f in context.current_files]
 
+        # ── Hooks: setup y callbacks de progreso ──────────────────────
+        durations: list[float] | None = None
+        if hooks:
+            durations = [get_duration(FFPROBE_BIN, f) for f in context.current_files]
+            if hooks.on_setup:
+                hooks.on_setup(filenames, context.base_folder.name)
+
+        active_idx = [0]
+
+        def on_file_start(i: int):
+            active_idx[0] = i
+            if hooks and hooks.on_file_active:
+                hooks.on_file_active(filenames[i])
+
+        def on_progress(value: float):
+            if hooks:
+                if hooks.on_file_progress:
+                    hooks.on_file_progress(filenames[active_idx[0]], value)
+                if hooks.on_pipeline_progress:
+                    hooks.on_pipeline_progress(
+                        (active_idx[0] + value) / len(filenames)
+                    )
+
+        def on_file_done_cb(i: int):
+            if hooks and hooks.on_file_done:
+                hooks.on_file_done(filenames[i])
+
+        # ── Ejecución ─────────────────────────────────────────────────
         def done(success: bool):
             on_done(success, context)
 
-        runner.run_sequential(args_list=args_list, on_log=on_log, on_done=done)
+        runner.run_sequential(
+            args_list=args_list,
+            on_log=on_log,
+            on_done=done,
+            on_progress=on_progress if hooks else None,
+            on_file_start=on_file_start if hooks else None,
+            on_file_done=on_file_done_cb if hooks else None,
+            durations=durations,
+        )

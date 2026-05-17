@@ -5,48 +5,91 @@ from typing import Callable
 
 import customtkinter as ctk
 
-from config import DEFAULT_BASE_FOLDER
 from core.ffmpeg_runner import FFmpegRunner
 from core.pipeline.context import PipelineContext
 from core.pipeline.executor import PipelineExecutor
+from core.pipeline.step_hooks import StepProgressHooks
 from core.pipeline.steps.audio_to_video_step import AudioToVideoStep
 from core.pipeline.steps.diverge_step import DivergeStep
 from core.pipeline.steps.merge_step import MergeStep
 from ui.components.drag_list import DragList
+from ui.components.pipeline_progress_panel import PipelineProgressPanel
 from ui.views.base_action_view import BaseActionView
 
 
 class PipelineView(BaseActionView):
 
-    def __init__(self, parent, runner: FFmpegRunner, on_log: Callable, **kwargs):
+    def __init__(
+        self,
+        parent,
+        runner: FFmpegRunner,
+        on_log: Callable,
+        on_toggle_logs: Callable,
+        **kwargs,
+    ):
         super().__init__(parent, runner, on_log, **kwargs)
+        self._on_toggle_logs = on_toggle_logs
         self._executor = PipelineExecutor()
         self._selected_files: list[Path] = []
         self._build()
 
+    # ── Build ─────────────────────────────────────────────────────────
+
     def _build(self):
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
 
-        top = ctk.CTkFrame(self, fg_color="transparent")
+        # ── Config frame ─────────────────────────────────────────────
+        self._config_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._config_frame.grid(row=0, column=0, sticky="nsew")
+        self._config_frame.grid_columnconfigure(0, weight=1)
+        self._config_frame.grid_rowconfigure(1, weight=1)
+
+        top = ctk.CTkFrame(self._config_frame, fg_color="transparent")
         top.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 4))
         top.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(top, text="Carpeta base").grid(row=0, column=0, padx=(0, 8), pady=(0, 4), sticky="w")
-        self._base_folder_label = ctk.CTkLabel(top, text=str(self._base_folder), anchor="w")
-        self._base_folder_label.grid(row=0, column=1, padx=4, pady=(0, 4), sticky="ew")
-        ctk.CTkButton(top, text="Cambiar", width=90, command=self._pick_base_folder).grid(row=0, column=2, pady=(0, 4))
+        ctk.CTkLabel(top, text="Carpeta base").grid(
+            row=0, column=0, padx=(0, 8), pady=(0, 4), sticky="w"
+        )
+        self._base_folder_label = ctk.CTkLabel(
+            top, text=str(self._base_folder), anchor="w"
+        )
+        self._base_folder_label.grid(
+            row=0, column=1, padx=4, pady=(0, 4), sticky="ew"
+        )
+        ctk.CTkButton(
+            top, text="Cambiar", width=90, command=self._pick_base_folder
+        ).grid(row=0, column=2, pady=(0, 4))
 
-        ctk.CTkLabel(top, text="Archivos").grid(row=1, column=0, padx=(0, 8), pady=4, sticky="w")
+        ctk.CTkLabel(top, text="Archivos").grid(
+            row=1, column=0, padx=(0, 8), pady=4, sticky="w"
+        )
         self._files_label = ctk.CTkLabel(top, text="Sin seleccionar", anchor="w")
         self._files_label.grid(row=1, column=1, padx=4, pady=4, sticky="ew")
-        ctk.CTkButton(top, text="Seleccionar", width=90, command=self._pick_files).grid(row=1, column=2, pady=4)
+        ctk.CTkButton(
+            top, text="Seleccionar", width=90, command=self._pick_files
+        ).grid(row=1, column=2, pady=4)
 
-        self._drag_list = DragList(self, on_active_change=lambda _: self._update_run_btn())
+        self._drag_list = DragList(
+            self._config_frame,
+            on_active_change=lambda _: self._update_run_btn(),
+        )
         self._drag_list.set_available([MergeStep(), DivergeStep(), AudioToVideoStep()])
         self._drag_list.grid(row=1, column=0, sticky="nsew", padx=12, pady=4)
 
-        self._build_run_button(row=2, text="Ejecutar pipeline")
+        self._build_run_button(
+            row=2, text="Ejecutar pipeline", parent=self._config_frame
+        )
+
+        # ── Panel de progreso ─────────────────────────────────────────
+        self._pipeline_panel = PipelineProgressPanel(
+            self, on_toggle_logs=self._on_toggle_logs
+        )
+        self._pipeline_panel.grid(row=0, column=0, sticky="nsew")
+        self._pipeline_panel.grid_remove()
+
+    # ── File / folder picking ─────────────────────────────────────────
 
     def _pick_files(self):
         files = filedialog.askopenfilenames(
@@ -55,12 +98,16 @@ class PipelineView(BaseActionView):
         )
         if files:
             self._selected_files = sorted(Path(f) for f in files)
-            self._files_label.configure(text=f"{len(self._selected_files)} archivo(s) seleccionado(s)")
+            self._files_label.configure(
+                text=f"{len(self._selected_files)} archivo(s) seleccionado(s)"
+            )
             self._update_run_btn()
 
     def _update_run_btn(self):
         ready = bool(self._selected_files) and bool(self._drag_list.get_active())
         self._set_run_btn_enabled(ready)
+
+    # ── Execution ─────────────────────────────────────────────────────
 
     def _run(self):
         steps = self._drag_list.get_active()
@@ -72,17 +119,83 @@ class PipelineView(BaseActionView):
             base_folder=self._base_folder,
             current_files=list(self._selected_files),
         )
-        self._set_run_btn_enabled(False)
+
+        step_names = [s.name for s in steps]
+        self._pipeline_panel.setup(step_names, title=self._base_folder.name)
+        self._config_frame.grid_remove()
+        self._pipeline_panel.grid()
+
         self._on_log(f"Iniciando pipeline con {len(steps)} paso(s)...")
+
+        panel = self._pipeline_panel  # alias local
+
+        def get_hooks(i: int) -> StepProgressHooks:
+            step_panel = panel.get_step_panel(i)
+
+            def on_setup(fns: list[str], title: str):
+                # on_setup es el primer callback: setup del ProgressPanel + switch de tab
+                def do():
+                    step_panel.setup(fns, title)
+                    panel.step_start(i)
+                self.after(0, do)
+
+            def on_file_active(fn: str):
+                self.after(0, lambda f=fn: step_panel.set_file_active(f))
+
+            def on_file_progress(fn: str, v: float):
+                self.after(0, lambda f=fn, val=v: step_panel.set_file_progress(f, val))
+
+            def on_file_done(fn: str):
+                self.after(0, lambda f=fn: step_panel.set_file_done(f))
+
+            def on_pipeline_progress(v: float):
+                self.after(0, lambda val=v: panel.update_pipeline_progress(i, val))
+
+            return StepProgressHooks(
+                on_setup=on_setup,
+                on_file_active=on_file_active,
+                on_file_progress=on_file_progress,
+                on_file_done=on_file_done,
+                on_pipeline_progress=on_pipeline_progress,
+            )
+
+        def on_step_done(idx: int, success: bool):
+            # Marcar archivos como done en el ProgressPanel del paso
+            step_panel = panel.get_step_panel(idx)
+            files = step_panel._file_list if hasattr(step_panel, "_file_list") else []
+            for fn in files:
+                self.after(0, lambda f=fn: step_panel.set_file_done(f))
+            self.after(0, lambda i=idx, s=success: panel.step_done(i, s))
+
         self._executor.execute(
             steps=steps,
             context=context,
             runner=self._runner,
             on_log=lambda line: self.after(0, lambda l=line: self._on_log(l)),
             on_done=lambda ok: self.after(0, lambda: self._finish(ok)),
+            get_hooks=get_hooks,
+            on_step_done=on_step_done,
         )
 
     def _finish(self, success: bool):
-        self._set_run_btn_enabled(True)
         self._log_elapsed_time()
-        self._on_log("✓ Pipeline completado." if success else "✗ Error en el pipeline.")
+        if success:
+            self._pipeline_panel.show_success(
+                "Pipeline completado exitosamente",
+                folder=self._base_folder,
+                on_new_run=self._reset,
+            )
+            self._on_log("✓ Pipeline completado.")
+        else:
+            self._pipeline_panel.show_error(
+                "Error en el pipeline. Ver logs para más detalle."
+            )
+            self._on_log("✗ Error en el pipeline.")
+
+    def _reset(self):
+        self._selected_files = []
+        self._files_label.configure(text="Sin seleccionar")
+        self._drag_list.set_available([MergeStep(), DivergeStep(), AudioToVideoStep()])
+        self._set_run_btn_enabled(False)
+        self._pipeline_panel.grid_remove()
+        self._config_frame.grid()
