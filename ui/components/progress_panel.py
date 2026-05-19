@@ -26,7 +26,6 @@ class GradientBar(tk.Canvas):
 
         bg = "#2b2b2b" if self._is_dark() else "#e0e0e0"
         self.create_rectangle(0, 0, w, h, fill=bg, outline="", tags="bg")
-
         r1 = self._create_round_rect(0, 0, w, h, radius=h // 2)
         self.create_polygon(r1, fill=bg, outline="", smooth=True)
 
@@ -40,24 +39,17 @@ class GradientBar(tk.Canvas):
                 b = int(245 + (250 - 245) * t)
                 color = f"#{r:02x}{g:02x}{b:02x}"
                 self.create_rectangle(i, 0, i + 1, h, fill=color, outline="")
-
             clip = self._create_round_rect(0, 0, fill_w, h, radius=h // 2)
             self.create_polygon(clip, fill="", outline="", smooth=True)
 
     def _create_round_rect(self, x1, y1, x2, y2, radius):
         return [
-            x1 + radius, y1,
-            x2 - radius, y1,
-            x2, y1,
-            x2, y1 + radius,
-            x2, y2 - radius,
-            x2, y2,
-            x2 - radius, y2,
-            x1 + radius, y2,
-            x1, y2,
-            x1, y2 - radius,
-            x1, y1 + radius,
-            x1, y1,
+            x1 + radius, y1, x2 - radius, y1,
+            x2, y1, x2, y1 + radius,
+            x2, y2 - radius, x2, y2,
+            x2 - radius, y2, x1 + radius, y2,
+            x1, y2, x1, y2 - radius,
+            x1, y1 + radius, x1, y1,
         ]
 
     def _is_dark(self):
@@ -66,14 +58,23 @@ class GradientBar(tk.Canvas):
 
 class ProgressPanel(ctk.CTkFrame):
 
-    def __init__(self, parent, on_toggle_logs: Callable, **kwargs):
+    def __init__(
+        self,
+        parent,
+        on_toggle_logs: Callable | None,
+        on_cancel: Callable | None = None,
+        **kwargs,
+    ):
         super().__init__(parent, **kwargs)
         self._on_toggle_logs = on_toggle_logs
+        self._on_cancel = on_cancel
         self._file_count = 0
         self._completed = 0
         self._file_rows: dict[str, dict] = {}
         self._file_list: list[str] = []
         self._build()
+
+    # ── Public API ────────────────────────────────────────────────────────────
 
     def setup(self, files: list[str], title: str = "") -> None:
         self._file_rows = {}
@@ -86,6 +87,9 @@ class ProgressPanel(ctk.CTkFrame):
         self._general_bar.set(0)
         self._refresh_file_list()
         self._hide_state()
+        if hasattr(self, "_stop_btn"):
+            self._stop_btn.configure(state="normal")
+            self._stop_btn.grid()
         self.after(200, self._update_scrollbar_visibility)
 
     def set_file_active(self, filename: str) -> None:
@@ -93,21 +97,22 @@ class ProgressPanel(ctk.CTkFrame):
         row = self._file_rows.get(filename)
         if row:
             row["tag"].grid_remove()
-            row["name"].configure(text_color=("gray10", "#e0e0e0"), font=ctk.CTkFont(size=13, weight="bold"))
+            row["name"].configure(
+                text_color=("gray10", "#e0e0e0"),
+                font=ctk.CTkFont(size=13, weight="bold"),
+            )
         self._show_file_bar(filename)
         self._pulse_filename = filename
         self._pulse_state = True
         self._animate_pulse()
-        
+
     def _animate_pulse(self):
         row = self._file_rows.get(getattr(self, "_pulse_filename", None))
         if not row or row.get("done"):
             return
         colors = [
-            ("#4ea8f5", "#4ea8f5"),
-            ("#7abcf7", "#7abcf7"),
-            ("#aad4fa", "#aad4fa"),
-            ("#7abcf7", "#7abcf7"),
+            ("#4ea8f5", "#4ea8f5"), ("#7abcf7", "#7abcf7"),
+            ("#aad4fa", "#aad4fa"), ("#7abcf7", "#7abcf7"),
         ]
         idx = getattr(self, "_pulse_step", 0)
         row["dot"].configure(text_color=colors[idx % len(colors)])
@@ -130,14 +135,20 @@ class ProgressPanel(ctk.CTkFrame):
         if hasattr(self, "_pulse_job"):
             self.after_cancel(self._pulse_job)
         self._update_dot(filename, "done")
-        row["name"].configure(text_color=("gray40", "gray70"), font=ctk.CTkFont(size=13, weight="normal"))
+        row["name"].configure(
+            text_color=("gray40", "gray70"),
+            font=ctk.CTkFont(size=13, weight="normal"),
+        )
         row["tag"].grid_remove()
         self._hide_file_bar(filename)
         self._completed += 1
         self._set_general_progress(self._completed / self._file_count)
-        self._files_label.configure(text=f"{self._completed} / {self._file_count} archivos completados")
+        self._files_label.configure(
+            text=f"{self._completed} / {self._file_count} archivos completados"
+        )
 
     def show_success(self, message: str, folder: Path, on_new_run: Callable) -> None:
+        self._hide_stop_btn()
         self._state_frame.configure(fg_color=("gray90", "#1a3a2a"))
         self._state_label.configure(
             text=f"✓  {message}",
@@ -146,10 +157,13 @@ class ProgressPanel(ctk.CTkFrame):
         )
         self._state_frame.grid()
         self._action_frame.grid()
+        self._open_folder_btn.grid(row=0, column=0, padx=8)
+        self._new_run_btn.grid(row=0, column=1, padx=8)
         self._open_folder_btn.configure(command=lambda: self._open_folder(folder))
         self._new_run_btn.configure(command=on_new_run)
 
     def show_error(self, message: str) -> None:
+        self._hide_stop_btn()
         self._state_frame.configure(fg_color=("gray90", "#3a1a1a"))
         self._state_label.configure(
             text=f"✕  {message}",
@@ -159,6 +173,22 @@ class ProgressPanel(ctk.CTkFrame):
         self._state_frame.grid()
         self._action_frame.grid_remove()
 
+    def show_cancelled(self, message: str, on_new_run: Callable) -> None:
+        self._hide_stop_btn()
+        self._state_frame.configure(fg_color=("gray90", "#2a2a2a"))
+        self._state_label.configure(
+            text=f"⏹  {message}",
+            text_color=("gray50", "gray50"),
+            font=ctk.CTkFont(size=13),
+        )
+        self._state_frame.grid()
+        self._action_frame.grid()
+        self._open_folder_btn.grid_remove()
+        self._new_run_btn.grid(row=0, column=0, padx=8)
+        self._new_run_btn.configure(command=on_new_run)
+
+    # ── Build ──────────────────────────────────────────────────────────────────
+
     def _build(self):
         self.grid_columnconfigure(0, weight=1)
 
@@ -166,20 +196,38 @@ class ProgressPanel(ctk.CTkFrame):
         header.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 8))
         header.grid_columnconfigure(0, weight=1)
 
-        self._title_label = ctk.CTkLabel(header, text="", anchor="w", font=ctk.CTkFont(size=18, weight="bold"))
+        self._title_label = ctk.CTkLabel(
+            header, text="", anchor="w", font=ctk.CTkFont(size=18, weight="bold")
+        )
         self._title_label.grid(row=0, column=0, sticky="w")
 
-        log_btn = ctk.CTkButton(
-            header,
-            text="",
-            image=self._make_log_icon(),
-            width=28,
-            height=28,
-            fg_color="transparent",
-            hover_color=("gray85", "gray25"),
-            command=self._on_toggle_logs,
-        )
-        log_btn.grid(row=0, column=1)
+        col = 1
+        if self._on_cancel:
+            self._stop_btn = ctk.CTkButton(
+                header,
+                text="Detener",
+                width=72, height=28,
+                fg_color="transparent",
+                border_width=1,
+                border_color=("#e57373", "#c62828"),
+                text_color=("#c62828", "#ef9a9a"),
+                hover_color=("gray85", "gray25"),
+                command=self._on_cancel,
+            )
+            self._stop_btn.grid(row=0, column=col, padx=(0, 6))
+            col += 1
+
+        if self._on_toggle_logs:
+            log_btn = ctk.CTkButton(
+                header,
+                text="",
+                image=self._make_log_icon(),
+                width=28, height=28,
+                fg_color="transparent",
+                hover_color=("gray85", "gray25"),
+                command=self._on_toggle_logs,
+            )
+            log_btn.grid(row=0, column=col)
 
         self._pct_label = ctk.CTkLabel(
             self, text="0%",
@@ -189,12 +237,17 @@ class ProgressPanel(ctk.CTkFrame):
         )
         self._pct_label.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 6))
 
-        self._general_bar = GradientBar(self, height=14, bg="#1a1a1a" if ctk.get_appearance_mode().lower() == "dark" else "#f0f0f0")
+        self._general_bar = GradientBar(
+            self, height=14,
+            bg="#1a1a1a" if ctk.get_appearance_mode().lower() == "dark" else "#f0f0f0",
+        )
         self._general_bar.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 6))
 
-        self._files_label = ctk.CTkLabel(self, text="0 / 0 archivos completados", anchor="w", font=ctk.CTkFont(size=13))
+        self._files_label = ctk.CTkLabel(
+            self, text="0 / 0 archivos completados",
+            anchor="w", font=ctk.CTkFont(size=13),
+        )
         self._files_label.grid(row=3, column=0, sticky="w", padx=20)
-
 
         separator = ctk.CTkFrame(self, height=1, fg_color=("gray80", "gray30"))
         separator.grid(row=5, column=0, sticky="ew", padx=20, pady=14)
@@ -215,9 +268,18 @@ class ProgressPanel(ctk.CTkFrame):
         self._action_frame.grid(row=8, column=0, pady=(0, 16))
         self._open_folder_btn = ctk.CTkButton(self._action_frame, text="Abrir carpeta")
         self._open_folder_btn.grid(row=0, column=0, padx=8)
-        self._new_run_btn = ctk.CTkButton(self._action_frame, text="Nueva ejecución", fg_color="transparent", border_width=1)
+        self._new_run_btn = ctk.CTkButton(
+            self._action_frame, text="Nueva ejecución",
+            fg_color="transparent", border_width=1,
+        )
         self._new_run_btn.grid(row=0, column=1, padx=8)
         self._action_frame.grid_remove()
+
+    # ── Internals ─────────────────────────────────────────────────────────────
+
+    def _hide_stop_btn(self):
+        if hasattr(self, "_stop_btn"):
+            self._stop_btn.grid_remove()
 
     def _refresh_file_list(self):
         for w in self._scroll.winfo_children():
@@ -226,7 +288,7 @@ class ProgressPanel(ctk.CTkFrame):
         for filename in self._file_list:
             self._make_file_row(filename)
         self.after(100, self._update_scrollbar_visibility)
-        
+
     def _update_scrollbar_visibility(self):
         try:
             scrollbar = self._scroll._scrollbar
@@ -245,17 +307,20 @@ class ProgressPanel(ctk.CTkFrame):
         dot = ctk.CTkLabel(frame, text="●", width=20, font=ctk.CTkFont(size=14), text_color="gray")
         dot.grid(row=0, column=0, padx=(0, 10))
 
-        tag = ctk.CTkLabel(frame, text="", anchor="w", font=ctk.CTkFont(size=14, weight="bold"), text_color=("#4ea8f5", "#4ea8f5"), width=0)
+        tag = ctk.CTkLabel(frame, text="", anchor="w", font=ctk.CTkFont(size=14, weight="bold"),
+                           text_color=("#4ea8f5", "#4ea8f5"), width=0)
         tag.grid(row=0, column=1)
         tag.grid_remove()
 
         name = ctk.CTkLabel(frame, text=filename, anchor="w", font=ctk.CTkFont(size=14))
         name.grid(row=0, column=2, sticky="ew")
 
-        pct = ctk.CTkLabel(frame, text="", width=52, font=ctk.CTkFont(size=14, weight="bold"), text_color=("#4ea8f5", "#4ea8f5"))
+        pct = ctk.CTkLabel(frame, text="", width=52, font=ctk.CTkFont(size=14, weight="bold"),
+                           text_color=("#4ea8f5", "#4ea8f5"))
         pct.grid(row=0, column=3, padx=(4, 0))
 
-        bar = GradientBar(frame, height=6, bg="#1a1a1a" if ctk.get_appearance_mode().lower() == "dark" else "#f0f0f0")
+        bar = GradientBar(frame, height=6,
+                          bg="#1a1a1a" if ctk.get_appearance_mode().lower() == "dark" else "#f0f0f0")
         bar.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(6, 0))
         bar.grid_remove()
 
@@ -266,8 +331,8 @@ class ProgressPanel(ctk.CTkFrame):
         if not row:
             return
         colors = {
-            "active": ("#4ea8f5", "#4ea8f5"),
-            "done": ("#4caf80", "#4caf80"),
+            "active":  ("#4ea8f5", "#4ea8f5"),
+            "done":    ("#4caf80", "#4caf80"),
             "pending": ("gray", "gray"),
         }
         row["dot"].configure(text_color=colors.get(state, ("gray", "gray")))

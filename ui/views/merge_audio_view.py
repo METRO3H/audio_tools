@@ -51,7 +51,10 @@ class MergeAudioView(BaseActionView):
 
         self._build_run_button(row=3, text="Ejecutar merge", parent=self._config_frame)
 
-        self._progress_panel = ProgressPanel(self, on_toggle_logs=self._on_toggle_logs)
+        # on_cancel conecta el botón Detener del ProgressPanel con self._cancel
+        self._progress_panel = ProgressPanel(
+            self, on_toggle_logs=self._on_toggle_logs, on_cancel=self._cancel
+        )
         self._progress_panel.grid(row=0, column=0, sticky="nsew")
         self._progress_panel.grid_remove()
 
@@ -71,9 +74,7 @@ class MergeAudioView(BaseActionView):
         if not output_file:
             return
 
-        # ── CAMBIO: guardamos output_file para poder llamar add_chapters en _finish
         self._output_file = output_file
-
         self._durations = [get_duration(FFPROBE_BIN, f) for f in self._selected_files]
         self._total_duration = sum(self._durations)
         self._current_file_index = 0
@@ -92,7 +93,7 @@ class MergeAudioView(BaseActionView):
 
         self._on_log("Iniciando merge...")
         self._execute(
-            args=self._action.build_args(config),   # ← idéntico al original
+            args=self._action.build_args(config),
             on_done=self._finish,
             on_progress=lambda v: self.after(0, lambda val=v: self._on_progress(val)),
             duration=self._total_duration,
@@ -115,18 +116,22 @@ class MergeAudioView(BaseActionView):
 
     def _finish(self, success: bool):
         self._log_elapsed_time()
+        if self._was_cancelled:
+            self._on_log("⏹ Merge cancelado por el usuario.")
+            self._progress_panel.show_cancelled(
+                "Merge cancelado",
+                on_new_run=self._reset,
+            )
+            return
         if success:
             for f in self._selected_files:
                 self._progress_panel.set_file_done(f.name)
-
-            # ── CAMBIO: añadir chapters al archivo ya mergeado (rápido, -c copy)
             self._action.add_chapters(
                 self._output_file,
                 self._selected_files,
                 self._durations,
                 FFMPEG_BIN,
             )
-
             self._progress_panel.show_success(
                 "Merge completado exitosamente",
                 folder=self._base_folder,

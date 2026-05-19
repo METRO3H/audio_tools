@@ -17,6 +17,12 @@ class BaseActionView(ctk.CTkFrame):
         self._on_log = on_log
         self._base_folder = DEFAULT_BASE_FOLDER
         self._start_time: float | None = None
+        self._was_cancelled = False
+
+    def _cancel(self):
+        """Detiene el proceso ffmpeg en curso."""
+        self._was_cancelled = True
+        self._runner.cancel()
 
     def _build_base_folder_row(self, row: int, parent=None):
         p = parent or self
@@ -56,6 +62,7 @@ class BaseActionView(ctk.CTkFrame):
         duration: float | None = None,
     ):
         self._start_time = time.monotonic()
+        self._was_cancelled = False
         self._runner.run(
             args=args,
             on_log=lambda line: self.after(0, lambda l=line: self._on_log(l)),
@@ -74,6 +81,7 @@ class BaseActionView(ctk.CTkFrame):
         durations: list[float] | None = None,
     ):
         self._start_time = time.monotonic()
+        self._was_cancelled = False
         self._runner.run_sequential(
             args_list=args_list,
             on_log=lambda line: self.after(0, lambda l=line: self._on_log(l)),

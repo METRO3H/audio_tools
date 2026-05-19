@@ -83,8 +83,9 @@ class PipelineView(BaseActionView):
         )
 
         # ── Panel de progreso ─────────────────────────────────────────
+        # on_cancel conecta el botón Detener del PipelineProgressPanel
         self._pipeline_panel = PipelineProgressPanel(
-            self, on_toggle_logs=self._on_toggle_logs
+            self, on_toggle_logs=self._on_toggle_logs, on_cancel=self._cancel
         )
         self._pipeline_panel.grid(row=0, column=0, sticky="nsew")
         self._pipeline_panel.grid_remove()
@@ -115,6 +116,7 @@ class PipelineView(BaseActionView):
             return
 
         self._start_time = time.monotonic()
+        self._was_cancelled = False
         context = PipelineContext(
             base_folder=self._base_folder,
             current_files=list(self._selected_files),
@@ -133,7 +135,6 @@ class PipelineView(BaseActionView):
             step_panel = panel.get_step_panel(i)
 
             def on_setup(fns: list[str], title: str):
-                # on_setup es el primer callback: setup del ProgressPanel + switch de tab
                 def do():
                     step_panel.setup(fns, title)
                     panel.step_start(i)
@@ -160,7 +161,6 @@ class PipelineView(BaseActionView):
             )
 
         def on_step_done(idx: int, success: bool):
-            # Marcar archivos como done en el ProgressPanel del paso
             step_panel = panel.get_step_panel(idx)
             files = step_panel._file_list if hasattr(step_panel, "_file_list") else []
             for fn in files:
@@ -179,6 +179,13 @@ class PipelineView(BaseActionView):
 
     def _finish(self, success: bool):
         self._log_elapsed_time()
+        if self._was_cancelled:
+            self._on_log("⏹ Pipeline cancelado por el usuario.")
+            self._pipeline_panel.show_cancelled(
+                "Pipeline cancelado",
+                on_new_run=self._reset,
+            )
+            return
         if success:
             self._pipeline_panel.show_success(
                 "Pipeline completado exitosamente",

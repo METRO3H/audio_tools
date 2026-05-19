@@ -2,7 +2,6 @@ from pathlib import Path
 from tkinter import filedialog
 from typing import Callable
 
-
 import customtkinter as ctk
 
 from config import FFPROBE_BIN
@@ -54,8 +53,10 @@ class AudioToVideoView(BaseActionView):
         self._build_run_button(
             row=3, text="Convertir a video", parent=self._config_frame)
 
+        # on_cancel conecta el botón Detener del ProgressPanel con self._cancel
         self._progress_panel = ProgressPanel(
-            self, on_toggle_logs=self._on_toggle_logs)
+            self, on_toggle_logs=self._on_toggle_logs, on_cancel=self._cancel
+        )
         self._progress_panel.grid(row=0, column=0, sticky="nsew")
         self._progress_panel.grid_remove()
 
@@ -110,7 +111,7 @@ class AudioToVideoView(BaseActionView):
                 0, lambda idx=i: self._progress_panel.set_file_done(filenames[idx])),
             durations=self._durations,
         )
-        
+
     def _on_file_progress(self, value: float):
         active = next(
             (f for f in self._selected_files if not self._progress_panel._file_rows.get(f.name, {}).get("done")),
@@ -121,6 +122,13 @@ class AudioToVideoView(BaseActionView):
 
     def _finish(self, success: bool):
         self._log_elapsed_time()
+        if self._was_cancelled:
+            self._on_log("⏹ Conversión cancelada por el usuario.")
+            self._progress_panel.show_cancelled(
+                "Conversión cancelada",
+                on_new_run=self._reset,
+            )
+            return
         if success:
             for f in self._selected_files:
                 self._progress_panel.set_file_done(f.name)

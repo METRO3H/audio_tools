@@ -15,33 +15,24 @@ class PipelineProgressPanel(ctk.CTkFrame):
 
     Estructura visible:
     ┌──────────────────────────────────────────────┐
-    │  Título del pipeline              [Logs]      │  ← header
+    │  Título del pipeline    [Detener]  [Logs]     │  ← header
     │  52%  (barra general del pipeline)            │  ← progreso global
     │  1 / 3 pasos completados                      │
     ├──────────────────────────────────────────────┤
     │  [1. Merge ✓]  →  [2. Diverge ●]  →  [🔒 3] │  ← tab pills
     ├──────────────────────────────────────────────┤
     │                                              │
-    │   ProgressPanel del step seleccionado        │  ← reutiliza el
-    │   (con su propio %, barra general y barras   │    componente real
-    │    por archivo)                              │
+    │   ProgressPanel del step seleccionado        │
+    │                                              │
     └──────────────────────────────────────────────┘
-
-    Uso:
-        panel.setup(step_names, title)            # antes de ejecutar
-        panel.get_step_panel(i)                   # para cablear los hooks
-        panel.step_start(i)                       # cambia al tab activo
-        panel.step_done(i, success)               # marca el step como terminado
-        panel.update_pipeline_progress(i, v)      # actualiza barra global en tiempo real
-        panel.show_success(msg, folder, callback)
-        panel.show_error(msg)
     """
 
     # ── Init ─────────────────────────────────────────────────────────
 
-    def __init__(self, parent, on_toggle_logs: Callable, **kwargs):
+    def __init__(self, parent, on_toggle_logs: Callable, on_cancel: Callable | None = None, **kwargs):
         super().__init__(parent, **kwargs)
         self._on_toggle_logs = on_toggle_logs
+        self._on_cancel = on_cancel
 
         self._steps: list[str] = []
         self._total_steps: int = 0
@@ -60,7 +51,6 @@ class PipelineProgressPanel(ctk.CTkFrame):
 
     def setup(self, step_names: list[str], title: str = "") -> None:
         """Inicializa el panel antes de lanzar la ejecución."""
-        # Destruir panels anteriores
         for p in self._progress_panels.values():
             p.destroy()
         for ph in self._placeholders.values():
@@ -82,11 +72,14 @@ class PipelineProgressPanel(ctk.CTkFrame):
         self._steps_label.configure(text=f"0 / {self._total_steps} pasos completados")
         self._hide_state()
 
-        # Crear un ProgressPanel y un placeholder por paso
+        # Mostrar botón Detener al iniciar
+        if hasattr(self, "_stop_btn"):
+            self._stop_btn.configure(state="normal")
+            self._stop_btn.grid()
+
         self._content_frame.grid_columnconfigure(0, weight=1)
         self._content_frame.grid_rowconfigure(0, weight=1)
         for i in range(self._total_steps):
-            # Placeholder (visible cuando el paso no ha comenzado)
             ph = ctk.CTkFrame(self._content_frame, fg_color="transparent")
             ph.grid(row=0, column=0, sticky="nsew")
             ph.grid_remove()
@@ -99,55 +92,40 @@ class PipelineProgressPanel(ctk.CTkFrame):
             ).pack(padx=20, pady=40, fill="x")
             self._placeholders[i] = ph
 
-            # ProgressPanel real (visible cuando el paso está activo o terminado)
-            p = ProgressPanel(self._content_frame, on_toggle_logs=self._on_toggle_logs)
+            p = ProgressPanel(self._content_frame, on_toggle_logs=None)
             p.grid(row=0, column=0, sticky="nsew")
             p.grid_remove()
             self._progress_panels[i] = p
 
-        # Construir los tab pills
         self._build_tabs()
-
-        # Mostrar placeholder del tab 0 (todos están bloqueados al inicio)
         self._show_content(0)
 
     def get_step_panel(self, index: int) -> ProgressPanel:
-        """Devuelve el ProgressPanel del paso `index` para cablear sus hooks."""
         return self._progress_panels[index]
 
     def step_start(self, index: int) -> None:
-        """
-        Llamado cuando el paso `index` comienza.
-        Cambia automáticamente al tab del paso activo.
-        """
         self._current_step = index
         self._refresh_tabs()
         self._select_tab(index, force=True)
 
     def step_done(self, index: int, success: bool) -> None:
-        """Llamado cuando el paso `index` termina."""
         self._step_done[index] = True
         self._step_progress[index] = 1.0
         completed = sum(self._step_done)
         self._steps_label.configure(
             text=f"{completed} / {self._total_steps} pasos completados"
         )
-        # Actualizar barra al 100 % de este paso
         self._recalculate_pipeline_bar()
         self._refresh_tabs()
-        # Refrescar contenido si es el tab activo
         if self._selected_tab == index:
             self._show_content(index)
 
     def update_pipeline_progress(self, step_index: int, step_progress: float) -> None:
-        """
-        Actualiza la barra global del pipeline en tiempo real.
-        `step_progress` ∈ [0, 1] es el avance dentro del paso actual.
-        """
         self._step_progress[step_index] = step_progress
         self._recalculate_pipeline_bar()
 
     def show_success(self, message: str, folder: Path, on_new_run: Callable) -> None:
+        self._hide_stop_btn()
         self._state_frame.configure(fg_color=("gray90", "#1a3a2a"))
         self._state_label.configure(
             text=f"✓  {message}",
@@ -156,10 +134,13 @@ class PipelineProgressPanel(ctk.CTkFrame):
         )
         self._state_frame.grid()
         self._action_frame.grid()
+        self._open_folder_btn.grid(row=0, column=0, padx=8)
+        self._new_run_btn.grid(row=0, column=1, padx=8)
         self._open_folder_btn.configure(command=lambda: self._open_folder(folder))
         self._new_run_btn.configure(command=on_new_run)
 
     def show_error(self, message: str) -> None:
+        self._hide_stop_btn()
         self._state_frame.configure(fg_color=("gray90", "#3a1a1a"))
         self._state_label.configure(
             text=f"✕  {message}",
@@ -168,6 +149,20 @@ class PipelineProgressPanel(ctk.CTkFrame):
         )
         self._state_frame.grid()
         self._action_frame.grid_remove()
+
+    def show_cancelled(self, message: str, on_new_run: Callable) -> None:
+        self._hide_stop_btn()
+        self._state_frame.configure(fg_color=("gray90", "#2a2a2a"))
+        self._state_label.configure(
+            text=f"⏹  {message}",
+            text_color=("gray50", "gray50"),
+            font=ctk.CTkFont(size=13),
+        )
+        self._state_frame.grid()
+        self._action_frame.grid()
+        self._open_folder_btn.grid_remove()
+        self._new_run_btn.grid(row=0, column=0, padx=8)
+        self._new_run_btn.configure(command=on_new_run)
 
     # ── Build ─────────────────────────────────────────────────────────
 
@@ -186,12 +181,28 @@ class PipelineProgressPanel(ctk.CTkFrame):
         )
         self._title_label.grid(row=0, column=0, sticky="w")
 
+        col = 1
+        if self._on_cancel:
+            self._stop_btn = ctk.CTkButton(
+                header,
+                text="Detener",
+                width=72, height=28,
+                fg_color="transparent",
+                border_width=1,
+                border_color=("#e57373", "#c62828"),
+                text_color=("#c62828", "#ef9a9a"),
+                hover_color=("gray85", "gray25"),
+                command=self._on_cancel,
+            )
+            self._stop_btn.grid(row=0, column=col, padx=(0, 6))
+            col += 1
+
         ctk.CTkButton(
             header, text="", image=self._make_log_icon(),
             width=28, height=28,
             fg_color="transparent", hover_color=("gray85", "gray25"),
             command=self._on_toggle_logs,
-        ).grid(row=0, column=1)
+        ).grid(row=0, column=col)
 
         # Porcentaje global del pipeline
         self._pct_label = ctk.CTkLabel(
@@ -228,13 +239,12 @@ class PipelineProgressPanel(ctk.CTkFrame):
             row=1, column=0, sticky="ew", pady=(0, 0)
         )
 
-        # Marco que aloja los ProgressPanel y placeholders
         self._content_frame = ctk.CTkFrame(tabs_outer, fg_color="transparent")
         self._content_frame.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
         self._content_frame.grid_columnconfigure(0, weight=1)
         self._content_frame.grid_rowconfigure(0, weight=1)
 
-        # Estado final (éxito / error)
+        # Estado final (éxito / error / cancelado)
         self._state_frame = ctk.CTkFrame(self, fg_color="transparent")
         self._state_frame.grid(row=5, column=0, sticky="ew", padx=20, pady=(4, 4))
         self._state_frame.grid_columnconfigure(0, weight=1)
@@ -282,7 +292,6 @@ class PipelineProgressPanel(ctk.CTkFrame):
         self._refresh_tabs()
 
     def _refresh_tabs(self):
-        """Actualiza color y estado de cada pill."""
         for i, btn in enumerate(self._tab_btns):
             if self._step_done[i]:
                 btn.configure(
@@ -309,11 +318,6 @@ class PipelineProgressPanel(ctk.CTkFrame):
                 )
 
     def _select_tab(self, index: int, force: bool = False):
-        """
-        Cambia el tab seleccionado.
-        Solo se puede ir a pasos activos o ya completados.
-        `force=True` lo usa el auto-switch al iniciar un paso.
-        """
         is_done = index < len(self._step_done) and self._step_done[index]
         is_active = index == self._current_step
         if not force and not (is_done or is_active):
@@ -324,11 +328,6 @@ class PipelineProgressPanel(ctk.CTkFrame):
     # ── Content switching ─────────────────────────────────────────────
 
     def _show_content(self, index: int):
-        """
-        Oculta todos los paneles/placeholders y muestra el del paso `index`.
-        - Si el paso ya ha comenzado (activo o terminado) → ProgressPanel real.
-        - Si no → placeholder con mensaje de bloqueo.
-        """
         for p in self._progress_panels.values():
             p.grid_remove()
         for ph in self._placeholders.values():
@@ -345,12 +344,7 @@ class PipelineProgressPanel(ctk.CTkFrame):
     # ── Pipeline bar calculation ──────────────────────────────────────
 
     def _recalculate_pipeline_bar(self):
-        """
-        Progreso global = (pasos_completados + progreso_del_paso_actual) / total_pasos.
-        Se recalcula en tiempo real cada vez que llega un update de progreso.
-        """
         completed = sum(self._step_done)
-        # El paso activo no está en step_done todavía, pero sí en step_progress
         active_progress = (
             self._step_progress[self._current_step]
             if 0 <= self._current_step < self._total_steps and not self._step_done[self._current_step]
@@ -361,6 +355,10 @@ class PipelineProgressPanel(ctk.CTkFrame):
         self._pct_label.configure(text=f"{int(total * 100)}%")
 
     # ── Helpers ───────────────────────────────────────────────────────
+
+    def _hide_stop_btn(self):
+        if hasattr(self, "_stop_btn"):
+            self._stop_btn.grid_remove()
 
     def _hide_state(self):
         self._state_frame.grid_remove()

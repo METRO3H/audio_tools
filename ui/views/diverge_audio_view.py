@@ -52,7 +52,10 @@ class DivergeAudioView(BaseActionView):
 
         self._build_run_button(row=4, text="Ejecutar diverge", parent=self._config_frame)
 
-        self._progress_panel = ProgressPanel(self, on_toggle_logs=self._on_toggle_logs)
+        # on_cancel conecta el botón Detener del ProgressPanel con self._cancel
+        self._progress_panel = ProgressPanel(
+            self, on_toggle_logs=self._on_toggle_logs, on_cancel=self._cancel
+        )
         self._progress_panel.grid(row=0, column=0, sticky="nsew")
         self._progress_panel.grid_remove()
 
@@ -110,6 +113,13 @@ class DivergeAudioView(BaseActionView):
 
     def _finish(self, success: bool):
         self._log_elapsed_time()
+        if self._was_cancelled:
+            self._on_log("⏹ Diverge cancelado por el usuario.")
+            self._progress_panel.show_cancelled(
+                "Diverge cancelado",
+                on_new_run=self._reset,
+            )
+            return
         if success:
             for f in self._output_files:
                 self._progress_panel.set_file_done(f.name)

@@ -24,3 +24,14 @@ test_*.py
 # Windows
 Thumbs.db
 desktop.ini
+
+# Compilation
+build/
+dist/
+*.spec
+*.egg-info/
+
+
+# General
+*.log
+*.txt

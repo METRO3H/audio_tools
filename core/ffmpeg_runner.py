@@ -11,6 +11,7 @@ class FFmpegRunner:
     def __init__(self, ffmpeg_path: str):
         self._ffmpeg_path = str(ffmpeg_path)
         self._process: subprocess.Popen | None = None
+        self._cancelled = False
 
     def run(
         self,
@@ -20,6 +21,7 @@ class FFmpegRunner:
         on_progress: Callable[[float], None] | None = None,
         duration: float | None = None,
     ) -> None:
+        self._cancelled = False
         thread = threading.Thread(
             target=self._worker,
             args=(args, on_log, on_done, on_progress, duration),
@@ -37,6 +39,7 @@ class FFmpegRunner:
         on_file_done: Callable[[int], None] | None = None,
         durations: list[float] | None = None,
     ) -> None:
+        self._cancelled = False
         thread = threading.Thread(
             target=self._sequential_worker,
             args=(args_list, on_log, on_done, on_progress,
@@ -46,6 +49,7 @@ class FFmpegRunner:
         thread.start()
 
     def cancel(self) -> None:
+        self._cancelled = True
         if self._process and self._process.poll() is None:
             self._process.terminate()
 
@@ -73,7 +77,7 @@ class FFmpegRunner:
                 if on_progress and duration:
                     self._parse_progress(line, duration, on_progress)
             self._process.wait()
-            return self._process.returncode == 0
+            return self._process.returncode == 0 and not self._cancelled
         except Exception as e:
             on_log(f"[error] {e}")
             return False
@@ -88,6 +92,10 @@ class FFmpegRunner:
 
     def _sequential_worker(self, args_list, on_log, on_done, on_progress, on_file_start, on_file_done, durations):
         for i, args in enumerate(args_list):
+            # Verificar cancelación antes de iniciar cada archivo
+            if self._cancelled:
+                on_done(False)
+                return
             on_log(f"--- Parte {i + 1}/{len(args_list)} ---")
             if on_file_start:
                 on_file_start(i)
