@@ -28,14 +28,24 @@ class AudioToVideoStep(BaseStep):
     def name(self) -> str:
         return "Audio a Video"
 
+    # ── Configuración pública (para pre-configuración desde el pipeline) ───────
+
+    def set_background_image(self, path: Path | None) -> None:
+        """Permite pre-configurar la imagen desde fuera del modal."""
+        self._background_image = path
+
+    # ── Modal de configuración ────────────────────────────────────────────────
+
     def open_config_modal(self, parent: ctk.CTk) -> None:
         modal = ctk.CTkToplevel(parent)
         modal.title("Configuración — Audio a Video")
-        modal.geometry("420x140")
+        modal.geometry("420x100")
         modal.grab_set()
         modal.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(modal, text="Imagen fondo").grid(row=0, column=0, padx=16, pady=(16, 8), sticky="w")
+        ctk.CTkLabel(modal, text="Imagen fondo").grid(
+            row=0, column=0, padx=16, pady=(16, 8), sticky="w"
+        )
         img_label = ctk.CTkLabel(
             modal,
             text=self._background_image.name if self._background_image else "Negra por defecto",
@@ -45,18 +55,21 @@ class AudioToVideoStep(BaseStep):
 
         def pick():
             file = filedialog.askopenfilename(
-                filetypes=[("Imagen", "*.jpg *.jpeg *.png *.bmp")]
+                filetypes=[("Imagen", "*.jpg *.jpeg *.png *.bmp *.webp")]
             )
             if file:
                 self._background_image = Path(file)
                 img_label.configure(text=self._background_image.name)
+                # Cerrar automáticamente al elegir imagen
+                modal.destroy()
 
         ctk.CTkButton(modal, text="Elegir", width=90, command=pick).grid(
             row=0, column=2, padx=16, pady=(16, 8)
         )
-        ctk.CTkButton(modal, text="Cerrar", command=modal.destroy).grid(
-            row=1, column=0, columnspan=3, padx=16, pady=16
-        )
+        # Nota: el botón "Cerrar" se eliminó; la modal se cierra al elegir
+        # o con la X de la ventana.
+
+    # ── Ejecución ─────────────────────────────────────────────────────────────
 
     def execute(
         self,
@@ -74,7 +87,6 @@ class AudioToVideoStep(BaseStep):
         args_list = self._action.build_args_list(config)
         filenames = [f.name for f in context.current_files]
 
-        # ── Hooks: setup y callbacks de progreso ──────────────────────
         durations: list[float] | None = None
         if hooks:
             durations = [get_duration(FFPROBE_BIN, f) for f in context.current_files]
@@ -101,7 +113,6 @@ class AudioToVideoStep(BaseStep):
             if hooks and hooks.on_file_done:
                 hooks.on_file_done(filenames[i])
 
-        # ── Ejecución ─────────────────────────────────────────────────
         def done(success: bool):
             on_done(success, context)
 

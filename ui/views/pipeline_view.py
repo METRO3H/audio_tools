@@ -15,6 +15,10 @@ from core.pipeline.steps.merge_step import MergeStep
 from ui.components.drag_list import DragList
 from ui.components.pipeline_progress_panel import PipelineProgressPanel
 from ui.views.base_action_view import BaseActionView
+from util.image_optimizer import optimize_image
+
+AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
 class PipelineView(BaseActionView):
@@ -31,6 +35,7 @@ class PipelineView(BaseActionView):
         self._on_toggle_logs = on_toggle_logs
         self._executor = PipelineExecutor()
         self._selected_files: list[Path] = []
+        self._atv_step = AudioToVideoStep()   # referencia estable para pre-configurar imagen
         self._build()
 
     # ── Build ─────────────────────────────────────────────────────────
@@ -49,19 +54,19 @@ class PipelineView(BaseActionView):
         top.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 4))
         top.grid_columnconfigure(1, weight=1)
 
+        # Fila 0: carpeta base
         ctk.CTkLabel(top, text="Carpeta base").grid(
             row=0, column=0, padx=(0, 8), pady=(0, 4), sticky="w"
         )
         self._base_folder_label = ctk.CTkLabel(
             top, text=str(self._base_folder), anchor="w"
         )
-        self._base_folder_label.grid(
-            row=0, column=1, padx=4, pady=(0, 4), sticky="ew"
-        )
+        self._base_folder_label.grid(row=0, column=1, padx=4, pady=(0, 4), sticky="ew")
         ctk.CTkButton(
             top, text="Cambiar", width=90, command=self._pick_base_folder
         ).grid(row=0, column=2, pady=(0, 4))
 
+        # Fila 1: selección de archivos
         ctk.CTkLabel(top, text="Archivos").grid(
             row=1, column=0, padx=(0, 8), pady=4, sticky="w"
         )
@@ -71,11 +76,29 @@ class PipelineView(BaseActionView):
             top, text="Seleccionar", width=90, command=self._pick_files
         ).grid(row=1, column=2, pady=4)
 
+        # Fila 2: indicador de auto-detección de audios (oculto por defecto)
+        self._audio_hint = ctk.CTkLabel(
+            top, text="", anchor="w",
+            font=ctk.CTkFont(size=11),
+            text_color=("#2e7d32", "#4caf80"),
+        )
+        self._audio_hint.grid(row=2, column=1, padx=4, pady=(0, 2), sticky="ew")
+        self._audio_hint.grid_remove()
+
+        # Fila 3: indicador de auto-detección de imagen (oculto por defecto)
+        self._image_hint = ctk.CTkLabel(
+            top, text="", anchor="w",
+            font=ctk.CTkFont(size=11),
+            text_color=("#2e7d32", "#4caf80"),
+        )
+        self._image_hint.grid(row=3, column=1, padx=4, pady=(0, 4), sticky="ew")
+        self._image_hint.grid_remove()
+
         self._drag_list = DragList(
             self._config_frame,
             on_active_change=lambda _: self._update_run_btn(),
         )
-        self._drag_list.set_available([MergeStep(), DivergeStep(), AudioToVideoStep()])
+        self._drag_list.set_available([MergeStep(), DivergeStep(), self._atv_step])
         self._drag_list.grid(row=1, column=0, sticky="nsew", padx=12, pady=4)
 
         self._build_run_button(
@@ -83,18 +106,71 @@ class PipelineView(BaseActionView):
         )
 
         # ── Panel de progreso ─────────────────────────────────────────
-        # on_cancel conecta el botón Detener del PipelineProgressPanel
         self._pipeline_panel = PipelineProgressPanel(
             self, on_toggle_logs=self._on_toggle_logs, on_cancel=self._cancel
         )
         self._pipeline_panel.grid(row=0, column=0, sticky="nsew")
         self._pipeline_panel.grid_remove()
 
-    # ── File / folder picking ─────────────────────────────────────────
+    # ── Auto-detección ────────────────────────────────────────────────
+
+    def _audios_dir(self) -> Path:
+        candidate = self._base_folder / "audios"
+        return candidate if candidate.is_dir() else self._base_folder
+
+    def _on_base_folder_changed(self):
+        self._autoselect_audios()
+        self._autoselect_image()
+        self._update_run_btn()
+
+    def _autoselect_audios(self):
+        audios_dir = self._base_folder / "audios"
+        self._audio_hint.grid_remove()
+        if not audios_dir.is_dir():
+            return
+        files = sorted(
+            [f for f in audios_dir.iterdir() if f.is_file() and f.suffix.lower() in AUDIO_EXTS],
+            key=lambda f: f.name,
+        )
+        if files:
+            self._selected_files = files
+            self._files_label.configure(
+                text=f"{len(files)} archivo(s) seleccionado(s)"
+            )
+            self._audio_hint.configure(
+                text=f"✓ {len(files)} audio(s) detectado(s) automáticamente desde ./audios"
+            )
+            self._audio_hint.grid()
+
+    def _autoselect_image(self):
+        images_dir = self._base_folder / "images"
+        self._image_hint.grid_remove()
+        self._atv_step.set_background_image(None)
+
+        if not images_dir.is_dir():
+            return
+        candidates = [
+            f for f in images_dir.iterdir()
+            if f.is_file() and f.suffix.lower() in IMAGE_EXTS
+        ]
+        if not candidates:
+            return
+
+        smallest = min(candidates, key=lambda f: f.stat().st_size)
+        optimized = optimize_image(smallest)
+        self._atv_step.set_background_image(optimized)
+
+        suffix = " (optimizada)" if optimized != smallest else ""
+        self._image_hint.configure(
+            text=f"✓ Imagen detectada automáticamente: {optimized.name}{suffix}"
+        )
+        self._image_hint.grid()
+
+    # ── File picking ─────────────────────────────────────────────────
 
     def _pick_files(self):
         files = filedialog.askopenfilenames(
-            initialdir=self._base_folder,
+            initialdir=self._audios_dir(),
             filetypes=[("Audio", "*.mp3 *.wav *.m4a *.aac *.ogg *.flac")],
         )
         if files:
@@ -102,6 +178,8 @@ class PipelineView(BaseActionView):
             self._files_label.configure(
                 text=f"{len(self._selected_files)} archivo(s) seleccionado(s)"
             )
+            # Al elegir manualmente se oculta el hint de auto-detección
+            self._audio_hint.grid_remove()
             self._update_run_btn()
 
     def _update_run_btn(self):
@@ -129,7 +207,7 @@ class PipelineView(BaseActionView):
 
         self._on_log(f"Iniciando pipeline con {len(steps)} paso(s)...")
 
-        panel = self._pipeline_panel  # alias local
+        panel = self._pipeline_panel
 
         def get_hooks(i: int) -> StepProgressHooks:
             step_panel = panel.get_step_panel(i)
@@ -181,10 +259,7 @@ class PipelineView(BaseActionView):
         self._log_elapsed_time()
         if self._was_cancelled:
             self._on_log("⏹ Pipeline cancelado por el usuario.")
-            self._pipeline_panel.show_cancelled(
-                "Pipeline cancelado",
-                on_new_run=self._reset,
-            )
+            self._pipeline_panel.show_cancelled("Pipeline cancelado", on_new_run=self._reset)
             return
         if success:
             self._pipeline_panel.show_success(
@@ -194,15 +269,17 @@ class PipelineView(BaseActionView):
             )
             self._on_log("✓ Pipeline completado.")
         else:
-            self._pipeline_panel.show_error(
-                "Error en el pipeline. Ver logs para más detalle."
-            )
+            self._pipeline_panel.show_error("Error en el pipeline. Ver logs para más detalle.")
             self._on_log("✗ Error en el pipeline.")
 
     def _reset(self):
         self._selected_files = []
         self._files_label.configure(text="Sin seleccionar")
-        self._drag_list.set_available([MergeStep(), DivergeStep(), AudioToVideoStep()])
+        self._audio_hint.grid_remove()
+        self._image_hint.grid_remove()
+        # Crear nueva instancia de AudioToVideoStep para limpiar estado
+        self._atv_step = AudioToVideoStep()
+        self._drag_list.set_available([MergeStep(), DivergeStep(), self._atv_step])
         self._set_run_btn_enabled(False)
         self._pipeline_panel.grid_remove()
         self._config_frame.grid()

@@ -13,6 +13,7 @@ from ui.components.progress_panel import ProgressPanel
 from ui.views.base_action_view import BaseActionView
 
 FORMATS = ["mp3", "wav", "aac", "m4a", "ogg", "flac"]
+AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
 
 
 class MergeAudioView(BaseActionView):
@@ -23,6 +24,8 @@ class MergeAudioView(BaseActionView):
         self._action = MergeAudioAction()
         self._selected_files: list[Path] = []
         self._build()
+
+    # ── Build ─────────────────────────────────────────────────────────
 
     def _build(self):
         self.grid_columnconfigure(0, weight=1)
@@ -51,16 +54,37 @@ class MergeAudioView(BaseActionView):
 
         self._build_run_button(row=3, text="Ejecutar merge", parent=self._config_frame)
 
-        # on_cancel conecta el botón Detener del ProgressPanel con self._cancel
         self._progress_panel = ProgressPanel(
             self, on_toggle_logs=self._on_toggle_logs, on_cancel=self._cancel
         )
         self._progress_panel.grid(row=0, column=0, sticky="nsew")
         self._progress_panel.grid_remove()
 
+    # ── Folder / file picking ─────────────────────────────────────────
+
+    def _audios_dir(self) -> Path:
+        """Devuelve ./audios si existe, si no la carpeta base."""
+        candidate = self._base_folder / "audios"
+        return candidate if candidate.is_dir() else self._base_folder
+
+    def _on_base_folder_changed(self):
+        """Al cambiar la carpeta base, auto-selecciona los audios de ./audios."""
+        audios_dir = self._base_folder / "audios"
+        if not audios_dir.is_dir():
+            return
+        files = sorted(
+            [f for f in audios_dir.iterdir() if f.is_file() and f.suffix.lower() in AUDIO_EXTS],
+            key=lambda f: f.name,
+        )
+        if files:
+            self._selected_files = files
+            self._refresh_files_box()
+            self._suggest_output_name()
+            self._set_run_btn_enabled(True)
+
     def _pick_files(self):
         files = filedialog.askopenfilenames(
-            initialdir=self._base_folder,
+            initialdir=self._audios_dir(),
             filetypes=[("Audio", "*.mp3 *.wav *.m4a *.aac *.ogg *.flac")],
         )
         if files:
@@ -68,6 +92,8 @@ class MergeAudioView(BaseActionView):
             self._refresh_files_box()
             self._suggest_output_name()
             self._set_run_btn_enabled(True)
+
+    # ── Run / finish / reset ──────────────────────────────────────────
 
     def _run(self):
         output_file = self._build_output_path()
@@ -118,24 +144,16 @@ class MergeAudioView(BaseActionView):
         self._log_elapsed_time()
         if self._was_cancelled:
             self._on_log("⏹ Merge cancelado por el usuario.")
-            self._progress_panel.show_cancelled(
-                "Merge cancelado",
-                on_new_run=self._reset,
-            )
+            self._progress_panel.show_cancelled("Merge cancelado", on_new_run=self._reset)
             return
         if success:
             for f in self._selected_files:
                 self._progress_panel.set_file_done(f.name)
             self._action.add_chapters(
-                self._output_file,
-                self._selected_files,
-                self._durations,
-                FFMPEG_BIN,
+                self._output_file, self._selected_files, self._durations, FFMPEG_BIN
             )
             self._progress_panel.show_success(
-                "Merge completado exitosamente",
-                folder=self._base_folder,
-                on_new_run=self._reset,
+                "Merge completado exitosamente", folder=self._base_folder, on_new_run=self._reset
             )
             self._on_log("✓ Merge completado.")
         else:
@@ -151,7 +169,7 @@ class MergeAudioView(BaseActionView):
         self._progress_panel.grid_remove()
         self._config_frame.grid()
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+    # ── Helpers ───────────────────────────────────────────────────────
 
     def _refresh_files_box(self):
         self._files_box.configure(state="normal")
