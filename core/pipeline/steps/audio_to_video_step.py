@@ -28,13 +28,8 @@ class AudioToVideoStep(BaseStep):
     def name(self) -> str:
         return "Audio a Video"
 
-    # ── Configuración pública (para pre-configuración desde el pipeline) ───────
-
     def set_background_image(self, path: Path | None) -> None:
-        """Permite pre-configurar la imagen desde fuera del modal."""
         self._background_image = path
-
-    # ── Modal de configuración ────────────────────────────────────────────────
 
     def open_config_modal(self, parent: ctk.CTk) -> None:
         modal = ctk.CTkToplevel(parent)
@@ -60,16 +55,11 @@ class AudioToVideoStep(BaseStep):
             if file:
                 self._background_image = Path(file)
                 img_label.configure(text=self._background_image.name)
-                # Cerrar automáticamente al elegir imagen
                 modal.destroy()
 
         ctk.CTkButton(modal, text="Elegir", width=90, command=pick).grid(
             row=0, column=2, padx=16, pady=(16, 8)
         )
-        # Nota: el botón "Cerrar" se eliminó; la modal se cierra al elegir
-        # o con la X de la ventana.
-
-    # ── Ejecución ─────────────────────────────────────────────────────────────
 
     def execute(
         self,
@@ -85,6 +75,7 @@ class AudioToVideoStep(BaseStep):
             background_image=self._background_image,
         )
         args_list = self._action.build_args_list(config)
+        output_files = self._action.get_output_files(config)
         filenames = [f.name for f in context.current_files]
 
         durations: list[float] | None = None
@@ -114,6 +105,11 @@ class AudioToVideoStep(BaseStep):
                 hooks.on_file_done(filenames[i])
 
         def done(success: bool):
+            if success:
+                # AudioToVideo produce videos → actualizar current_files con los videos
+                # pero preservar audio_files para que TranscribeStep los encuentre
+                context.current_files = output_files
+                # context.audio_files se deja intacto intencionalmente
             on_done(success, context)
 
         runner.run_sequential(

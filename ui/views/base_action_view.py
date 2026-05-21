@@ -9,6 +9,19 @@ from config import DEFAULT_BASE_FOLDER
 from core.ffmpeg_runner import FFmpegRunner
 
 
+def _format_duration(seconds: int) -> str:
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    parts = []
+    if h:
+        parts.append(f"{h}h")
+    if m:
+        parts.append(f"{m}min")
+    parts.append(f"{s}seg")
+    return " ".join(parts)
+
+
 class BaseActionView(ctk.CTkFrame):
 
     def __init__(self, parent, runner: FFmpegRunner, on_log: Callable, **kwargs):
@@ -20,7 +33,6 @@ class BaseActionView(ctk.CTkFrame):
         self._was_cancelled = False
 
     def _cancel(self):
-        """Detiene el proceso ffmpeg en curso."""
         self._was_cancelled = True
         self._runner.cancel()
 
@@ -92,20 +104,20 @@ class BaseActionView(ctk.CTkFrame):
             durations=durations,
         )
 
-    def _log_elapsed_time(self):
+    def _log_summary(self, label: str = "Resumen"):
+        """Imprime un bloque de resumen con el tiempo total de la acción."""
         if self._start_time is None:
             return
         elapsed = int(time.monotonic() - self._start_time)
-        h = elapsed // 3600
-        m = (elapsed % 3600) // 60
-        s = elapsed % 60
-        parts = []
-        if h:
-            parts.append(f"{h}h")
-        if m:
-            parts.append(f"{m}min")
-        parts.append(f"{s}seg")
-        self._on_log(f"Tiempo transcurrido: {', '.join(parts)}")
+        sep = "─" * 38
+        self._on_log(sep)
+        self._on_log(f"  {label}")
+        self._on_log(f"  Tiempo total : {_format_duration(elapsed)}")
+        self._on_log(sep)
+
+    # Alias para compatibilidad con llamadas existentes
+    def _log_elapsed_time(self):
+        self._log_summary()
 
     def _build(self):
         raise NotImplementedError

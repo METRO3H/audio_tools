@@ -15,6 +15,7 @@ ffmpeg/
 _concat_list.txt
 
 # Tests manuales
+test/
 test_*.py
 
 # IDEs
@@ -35,3 +36,6 @@ dist/
 # General
 *.log
 *.txt
+
+# ml models
+models/

@@ -83,7 +83,6 @@ class DivergeStep(BaseStep):
         ]
         filenames = [f.name for f in output_files]
 
-        # ── Hooks: setup y callbacks de progreso ──────────────────────
         if hooks and hooks.on_setup:
             hooks.on_setup(filenames, input_file.stem)
 
@@ -107,10 +106,11 @@ class DivergeStep(BaseStep):
             if hooks and hooks.on_file_done:
                 hooks.on_file_done(filenames[i])
 
-        # ── Ejecución ─────────────────────────────────────────────────
         def done(success: bool):
             if success:
+                # Diverge produce audios → actualizar ambos campos
                 context.current_files = output_files
+                context.audio_files   = output_files
             on_done(success, context)
 
         runner.run_sequential(

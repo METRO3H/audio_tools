@@ -81,14 +81,12 @@ class MergeStep(BaseStep):
             base_folder=context.base_folder,
         )
 
-        # Duraciones para progress tracking y para add_chapters al finalizar
         durations = [get_duration(FFPROBE_BIN, f) for f in context.current_files]
         duration_total = sum(durations)
         filenames = [f.name for f in context.current_files]
 
-        args = self._action.build_args(config, on_log=on_log)   # ← mismo comando original
+        args = self._action.build_args(config, on_log=on_log)
 
-        # ── Hooks ────────────────────────────────────────────────────
         on_progress_cb = None
 
         if hooks:
@@ -119,16 +117,13 @@ class MergeStep(BaseStep):
                 if hooks.on_pipeline_progress:
                     hooks.on_pipeline_progress(value)
 
-        # ── Ejecución ─────────────────────────────────────────────────
-        input_files_snapshot = list(context.current_files)   # copia antes de modificar
+        input_files_snapshot = list(context.current_files)
 
         def done(success: bool):
             if success:
-                # add_chapters corre en el worker thread: sin bloquear la UI
-                self._action.add_chapters(
-                    output_file, input_files_snapshot, durations, FFMPEG_BIN
-                )
+                # Merge produce un audio → actualizar ambos campos
                 context.current_files = [output_file]
+                context.audio_files   = [output_file]
             self._action.cleanup()
             on_done(success, context)
 

@@ -112,7 +112,7 @@ class DivergeAudioView(BaseActionView):
             self._progress_panel.set_file_progress(active.name, value)
 
     def _finish(self, success: bool):
-        self._log_elapsed_time()
+        self._log_summary("Resumen — Diverge")
         if self._was_cancelled:
             self._on_log("⏹ Diverge cancelado por el usuario.")
             self._progress_panel.show_cancelled(
