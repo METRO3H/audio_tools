@@ -10,7 +10,7 @@ from core.ffmpeg_runner import FFmpegRunner
 from core.media_info import get_duration
 from core.models import DivergeAudioConfig
 from ui.components.progress_panel import ProgressPanel
-from ui.views.base_action_view import BaseActionView
+from ui.views.base_action_view import BaseActionView, _elapsed_text
 
 FORMATS = ["mp3", "wav", "aac", "m4a", "ogg", "flac"]
 
@@ -127,10 +127,11 @@ class DivergeAudioView(BaseActionView):
                 "Diverge completado exitosamente",
                 folder=self._base_folder / "parts",
                 on_new_run=self._reset,
+                elapsed_seconds=self._get_elapsed(),
             )
             self._on_log("✓ Diverge completado.")
         else:
-            self._progress_panel.show_error("Error al ejecutar el diverge. Ver logs para más detalle.")
+            self._progress_panel.show_error("Error al ejecutar el diverge. Ver logs para más detalle.", elapsed_seconds=self._get_elapsed())
             self._on_log("✗ Error en el diverge.")
 
     def _reset(self):

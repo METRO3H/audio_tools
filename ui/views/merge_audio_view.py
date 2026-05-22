@@ -10,7 +10,7 @@ from core.ffmpeg_runner import FFmpegRunner
 from core.media_info import get_duration
 from core.models import MergeAudioConfig
 from ui.components.progress_panel import ProgressPanel
-from ui.views.base_action_view import BaseActionView
+from ui.views.base_action_view import BaseActionView, _elapsed_text
 
 FORMATS = ["mp3", "wav", "aac", "m4a", "ogg", "flac"]
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
@@ -141,10 +141,11 @@ class MergeAudioView(BaseActionView):
             cumulative += dur
 
     def _finish(self, success: bool):
+        timing = _elapsed_text(self._start_time)
         self._log_summary("Resumen — Merge")
         if self._was_cancelled:
             self._on_log("⏹ Merge cancelado por el usuario.")
-            self._progress_panel.show_cancelled("Merge cancelado", on_new_run=self._reset)
+            self._progress_panel.show_cancelled("Merge cancelado", on_new_run=self._reset, timing_text=timing)
             return
         if success:
             for f in self._selected_files:
@@ -153,11 +154,11 @@ class MergeAudioView(BaseActionView):
                 self._output_file, self._selected_files, self._durations, FFMPEG_BIN
             )
             self._progress_panel.show_success(
-                "Merge completado exitosamente", folder=self._base_folder, on_new_run=self._reset
+                "Merge completado exitosamente", folder=self._base_folder, on_new_run=self._reset, timing_text=timing
             )
             self._on_log("✓ Merge completado.")
         else:
-            self._progress_panel.show_error("Error al ejecutar el merge. Ver logs para más detalle.")
+            self._progress_panel.show_error("Error al ejecutar el merge. Ver logs para más detalle.", timing_text=timing)
             self._on_log("✗ Error en el merge.")
 
     def _reset(self):

@@ -10,7 +10,7 @@ from core.ffmpeg_runner import FFmpegRunner
 from core.models import AudioToVideoConfig
 from core.media_info import get_duration
 from ui.components.progress_panel import ProgressPanel
-from ui.views.base_action_view import BaseActionView
+from ui.views.base_action_view import BaseActionView, _elapsed_text
 from util.image_optimizer import optimize_image
 
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
@@ -167,10 +167,11 @@ class AudioToVideoView(BaseActionView):
             self._progress_panel.set_file_progress(active.name, value)
 
     def _finish(self, success: bool):
+        timing = _elapsed_text(self._start_time)
         self._log_summary("Resumen — Audio a Video")
         if self._was_cancelled:
             self._on_log("⏹ Conversión cancelada por el usuario.")
-            self._progress_panel.show_cancelled("Conversión cancelada", on_new_run=self._reset)
+            self._progress_panel.show_cancelled("Conversión cancelada", on_new_run=self._reset, timing_text=timing)
             return
         if success:
             for f in self._selected_files:
@@ -179,10 +180,11 @@ class AudioToVideoView(BaseActionView):
                 "Conversión completada exitosamente",
                 folder=self._base_folder / "translation",
                 on_new_run=self._reset,
+                timing_text=timing,
             )
             self._on_log("✓ Conversión completada.")
         else:
-            self._progress_panel.show_error("Error en la conversión. Ver logs para más detalle.")
+            self._progress_panel.show_error("Error en la conversión. Ver logs para más detalle.", timing_text=timing)
             self._on_log("✗ Error en la conversión.")
 
     def _reset(self):

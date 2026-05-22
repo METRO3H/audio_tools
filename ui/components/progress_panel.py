@@ -6,6 +6,19 @@ from typing import Callable
 import customtkinter as ctk
 
 
+def _format_duration(seconds: int) -> str:
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    parts = []
+    if h:
+        parts.append(f"{h}h")
+    if m:
+        parts.append(f"{m}min")
+    parts.append(f"{s}seg")
+    return " ".join(parts)
+
+
 class GradientBar(tk.Canvas):
 
     def __init__(self, parent, height=14, **kwargs):
@@ -147,7 +160,13 @@ class ProgressPanel(ctk.CTkFrame):
             text=f"{self._completed} / {self._file_count} archivos completados"
         )
 
-    def show_success(self, message: str, folder: Path, on_new_run: Callable) -> None:
+    def show_success(
+        self,
+        message: str,
+        folder: Path,
+        on_new_run: Callable,
+        elapsed_seconds: int | None = None,
+    ) -> None:
         self._hide_stop_btn()
         self._state_frame.configure(fg_color=("gray90", "#1a3a2a"))
         self._state_label.configure(
@@ -155,6 +174,7 @@ class ProgressPanel(ctk.CTkFrame):
             text_color=("darkgreen", "#4caf80"),
             font=ctk.CTkFont(size=14, weight="bold"),
         )
+        self._show_timing(elapsed_seconds)
         self._state_frame.grid()
         self._action_frame.grid()
         self._open_folder_btn.grid(row=0, column=0, padx=8)
@@ -162,7 +182,11 @@ class ProgressPanel(ctk.CTkFrame):
         self._open_folder_btn.configure(command=lambda: self._open_folder(folder))
         self._new_run_btn.configure(command=on_new_run)
 
-    def show_error(self, message: str) -> None:
+    def show_error(
+        self,
+        message: str,
+        elapsed_seconds: int | None = None,
+    ) -> None:
         self._hide_stop_btn()
         self._state_frame.configure(fg_color=("gray90", "#3a1a1a"))
         self._state_label.configure(
@@ -170,10 +194,16 @@ class ProgressPanel(ctk.CTkFrame):
             text_color=("darkred", "#f28b82"),
             font=ctk.CTkFont(size=12),
         )
+        self._show_timing(elapsed_seconds)
         self._state_frame.grid()
         self._action_frame.grid_remove()
 
-    def show_cancelled(self, message: str, on_new_run: Callable) -> None:
+    def show_cancelled(
+        self,
+        message: str,
+        on_new_run: Callable,
+        elapsed_seconds: int | None = None,
+    ) -> None:
         self._hide_stop_btn()
         self._state_frame.configure(fg_color=("gray90", "#2a2a2a"))
         self._state_label.configure(
@@ -181,6 +211,7 @@ class ProgressPanel(ctk.CTkFrame):
             text_color=("gray50", "gray50"),
             font=ctk.CTkFont(size=13),
         )
+        self._show_timing(elapsed_seconds)
         self._state_frame.grid()
         self._action_frame.grid()
         self._open_folder_btn.grid_remove()
@@ -257,15 +288,30 @@ class ProgressPanel(ctk.CTkFrame):
         self._scroll.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(6, weight=1)
 
+        # ── State frame (éxito / error / cancelado) ───────────────────
         self._state_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self._state_frame.grid(row=7, column=0, sticky="ew", padx=20, pady=(12, 4))
+        self._state_frame.grid(row=7, column=0, sticky="ew", padx=20, pady=(12, 0))
         self._state_frame.grid_columnconfigure(0, weight=1)
-        self._state_label = ctk.CTkLabel(self._state_frame, text="", anchor="w")
-        self._state_label.grid(row=0, column=0, sticky="ew", padx=14, pady=10)
+
+        self._state_label = ctk.CTkLabel(
+            self._state_frame, text="", anchor="w")
+        self._state_label.grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 4))
+
+        # Label de timing — visible solo al finalizar
+        self._timing_label = ctk.CTkLabel(
+            self._state_frame,
+            text="",
+            anchor="w",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray45", "gray60"),
+        )
+        self._timing_label.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 10))
+        self._timing_label.grid_remove()
+
         self._state_frame.grid_remove()
 
         self._action_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self._action_frame.grid(row=8, column=0, pady=(0, 16))
+        self._action_frame.grid(row=8, column=0, pady=(8, 16))
         self._open_folder_btn = ctk.CTkButton(self._action_frame, text="Abrir carpeta")
         self._open_folder_btn.grid(row=0, column=0, padx=8)
         self._new_run_btn = ctk.CTkButton(
@@ -276,6 +322,15 @@ class ProgressPanel(ctk.CTkFrame):
         self._action_frame.grid_remove()
 
     # ── Internals ─────────────────────────────────────────────────────────────
+
+    def _show_timing(self, elapsed_seconds: int | None) -> None:
+        if elapsed_seconds is not None:
+            self._timing_label.configure(
+                text=f"⏱  Tiempo total: {_format_duration(elapsed_seconds)}"
+            )
+            self._timing_label.grid()
+        else:
+            self._timing_label.grid_remove()
 
     def _hide_stop_btn(self):
         if hasattr(self, "_stop_btn"):

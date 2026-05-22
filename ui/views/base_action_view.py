@@ -104,11 +104,17 @@ class BaseActionView(ctk.CTkFrame):
             durations=durations,
         )
 
+    def _get_elapsed(self) -> int | None:
+        """Devuelve los segundos transcurridos desde el inicio, o None si no empezó."""
+        if self._start_time is None:
+            return None
+        return int(time.monotonic() - self._start_time)
+
     def _log_summary(self, label: str = "Resumen"):
         """Imprime un bloque de resumen con el tiempo total de la acción."""
-        if self._start_time is None:
+        elapsed = self._get_elapsed()
+        if elapsed is None:
             return
-        elapsed = int(time.monotonic() - self._start_time)
         sep = "─" * 38
         self._on_log(sep)
         self._on_log(f"  {label}")
@@ -124,3 +130,11 @@ class BaseActionView(ctk.CTkFrame):
 
     def _run(self):
         raise NotImplementedError
+
+
+def _elapsed_text(start_time: float | None) -> str | None:
+    """Devuelve '⏱  Xmin Yseg' listo para mostrarse en el panel, o None."""
+    if start_time is None:
+        return None
+    import time
+    return f"⏱  {_format_duration(int(time.monotonic() - start_time))}"

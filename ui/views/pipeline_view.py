@@ -269,20 +269,29 @@ class PipelineView(BaseActionView):
 
     def _finish(self, success: bool):
         self._log_pipeline_summary(success)
+        elapsed = self._get_elapsed()
+        timings = self._step_timings or None
 
         if self._was_cancelled:
             self._pipeline_panel.show_cancelled(
-                "Pipeline cancelado", on_new_run=self._reset)
+                "Pipeline cancelado", on_new_run=self._reset,
+                step_timings=timings, total_elapsed=elapsed,
+            )
             return
         if success:
             self._pipeline_panel.show_success(
                 "Pipeline completado exitosamente",
                 folder=self._base_folder,
                 on_new_run=self._reset,
+                step_timings=timings,
+                total_elapsed=elapsed,
             )
         else:
             self._pipeline_panel.show_error(
-                "Error en el pipeline. Ver logs para más detalle.")
+                "Error en el pipeline. Ver logs para más detalle.",
+                step_timings=timings,
+                total_elapsed=elapsed,
+            )
 
     def _log_pipeline_summary(self, success: bool):
         if self._start_time is None:

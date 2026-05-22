@@ -18,7 +18,7 @@ from core.transcription.whisper_runner import (
     WhisperRunner,
 )
 from ui.components.progress_panel import ProgressPanel
-from ui.views.base_action_view import BaseActionView
+from ui.views.base_action_view import BaseActionView, _elapsed_text
 
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
 
@@ -193,28 +193,30 @@ class TranscribeView(BaseActionView):
         )
 
     def _finish(self, success: bool):
+        timing = _elapsed_text(self._start_time)
         self._log_summary("Resumen — Transcripción")
 
         if self._was_cancelled:
             self._on_log("⏹ Transcripción cancelada por el usuario.")
             self._progress_panel.show_cancelled(
-                "Transcripción cancelada", on_new_run=self._reset
+                "Transcripción cancelada", on_new_run=self._reset, timing_text=timing
             )
             return
 
         if success:
             self._progress_panel.set_file_done(self._input_file.name)
-            # Escribir SRT con los segmentos recolectados
             self._action.write_srt(self._segments, self._output_path)
             self._on_log(f"✓ SRT guardado en: {self._output_path}")
             self._progress_panel.show_success(
                 "Transcripción completada exitosamente",
                 folder=self._output_path.parent,
                 on_new_run=self._reset,
+                timing_text=timing,
             )
         else:
             self._progress_panel.show_error(
-                "Error en la transcripción. Ver logs para más detalle."
+                "Error en la transcripción. Ver logs para más detalle.",
+                timing_text=timing,
             )
             self._on_log("✗ Error en la transcripción.")
 

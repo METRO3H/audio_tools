@@ -6,7 +6,7 @@ from typing import Callable
 
 import customtkinter as ctk
 
-from ui.components.progress_panel import GradientBar, ProgressPanel
+from ui.components.progress_panel import GradientBar, ProgressPanel, _format_duration
 
 
 class PipelineProgressPanel(ctk.CTkFrame):
@@ -124,7 +124,7 @@ class PipelineProgressPanel(ctk.CTkFrame):
         self._step_progress[step_index] = step_progress
         self._recalculate_pipeline_bar()
 
-    def show_success(self, message: str, folder: Path, on_new_run: Callable) -> None:
+    def show_success(self, message: str, folder: Path, on_new_run: Callable, timing_text: str | None = None) -> None:
         self._hide_stop_btn()
         self._state_frame.configure(fg_color=("gray90", "#1a3a2a"))
         self._state_label.configure(
@@ -132,6 +132,7 @@ class PipelineProgressPanel(ctk.CTkFrame):
             text_color=("darkgreen", "#4caf80"),
             font=ctk.CTkFont(size=14, weight="bold"),
         )
+        self._show_timing(timing_text, ("darkgreen", "#4caf80"))
         self._state_frame.grid()
         self._action_frame.grid()
         self._open_folder_btn.grid(row=0, column=0, padx=8)
@@ -139,7 +140,7 @@ class PipelineProgressPanel(ctk.CTkFrame):
         self._open_folder_btn.configure(command=lambda: self._open_folder(folder))
         self._new_run_btn.configure(command=on_new_run)
 
-    def show_error(self, message: str) -> None:
+    def show_error(self, message: str, timing_text: str | None = None) -> None:
         self._hide_stop_btn()
         self._state_frame.configure(fg_color=("gray90", "#3a1a1a"))
         self._state_label.configure(
@@ -147,10 +148,11 @@ class PipelineProgressPanel(ctk.CTkFrame):
             text_color=("darkred", "#f28b82"),
             font=ctk.CTkFont(size=12),
         )
+        self._show_timing(timing_text, ("darkred", "#f28b82"))
         self._state_frame.grid()
         self._action_frame.grid_remove()
 
-    def show_cancelled(self, message: str, on_new_run: Callable) -> None:
+    def show_cancelled(self, message: str, on_new_run: Callable, timing_text: str | None = None) -> None:
         self._hide_stop_btn()
         self._state_frame.configure(fg_color=("gray90", "#2a2a2a"))
         self._state_label.configure(
@@ -158,6 +160,7 @@ class PipelineProgressPanel(ctk.CTkFrame):
             text_color=("gray50", "gray50"),
             font=ctk.CTkFont(size=13),
         )
+        self._show_timing(timing_text, ("gray50", "gray50"))
         self._state_frame.grid()
         self._action_frame.grid()
         self._open_folder_btn.grid_remove()
@@ -246,15 +249,19 @@ class PipelineProgressPanel(ctk.CTkFrame):
 
         # Estado final (éxito / error / cancelado)
         self._state_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self._state_frame.grid(row=5, column=0, sticky="ew", padx=20, pady=(4, 4))
+        self._state_frame.grid(row=5, column=0, sticky="ew", padx=20, pady=(4, 0))
         self._state_frame.grid_columnconfigure(0, weight=1)
         self._state_label = ctk.CTkLabel(self._state_frame, text="", anchor="w")
-        self._state_label.grid(row=0, column=0, sticky="ew", padx=14, pady=10)
+        self._state_label.grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 4))
+        # Tabla de timings por step — se puebla dinámicamente al finalizar
+        self._timing_frame = ctk.CTkFrame(self._state_frame, fg_color="transparent")
+        self._timing_frame.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 10))
+        self._timing_frame.grid_remove()
         self._state_frame.grid_remove()
 
         # Botones de acción
         self._action_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self._action_frame.grid(row=6, column=0, pady=(0, 16))
+        self._action_frame.grid(row=6, column=0, pady=(4, 16))
         self._open_folder_btn = ctk.CTkButton(self._action_frame, text="Abrir carpeta")
         self._open_folder_btn.grid(row=0, column=0, padx=8)
         self._new_run_btn = ctk.CTkButton(
@@ -355,6 +362,67 @@ class PipelineProgressPanel(ctk.CTkFrame):
         self._pct_label.configure(text=f"{int(total * 100)}%")
 
     # ── Helpers ───────────────────────────────────────────────────────
+
+    def _show_timing_summary(
+        self,
+        step_timings: list | None,
+        total_elapsed: int | None,
+    ) -> None:
+        """Puebla _timing_frame con una tabla de tiempos por step + total."""
+        # Limpiar widgets anteriores
+        for w in self._timing_frame.winfo_children():
+            w.destroy()
+
+        if not step_timings and total_elapsed is None:
+            self._timing_frame.grid_remove()
+            return
+
+        self._timing_frame.grid_columnconfigure(1, weight=1)
+        row = 0
+
+        if step_timings:
+            max_name = max((len(n) for n, _ in step_timings), default=0)
+            for name, elapsed in step_timings:
+                ctk.CTkLabel(
+                    self._timing_frame,
+                    text=name,
+                    anchor="w",
+                    font=ctk.CTkFont(size=12),
+                    text_color=("gray40", "gray65"),
+                    width=max_name * 8,
+                ).grid(row=row, column=0, sticky="w", pady=1)
+                ctk.CTkLabel(
+                    self._timing_frame,
+                    text=_format_duration(elapsed),
+                    anchor="w",
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                    text_color=("gray30", "gray75"),
+                ).grid(row=row, column=1, sticky="w", padx=(12, 0), pady=1)
+                row += 1
+
+            # Separador
+            ctk.CTkFrame(
+                self._timing_frame, height=1, fg_color=("gray75", "gray35")
+            ).grid(row=row, column=0, columnspan=2, sticky="ew", pady=(4, 4))
+            row += 1
+
+        if total_elapsed is not None:
+            ctk.CTkLabel(
+                self._timing_frame,
+                text="Total",
+                anchor="w",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=("gray20", "gray85"),
+            ).grid(row=row, column=0, sticky="w", pady=1)
+            ctk.CTkLabel(
+                self._timing_frame,
+                text=f"⏱  {_format_duration(total_elapsed)}",
+                anchor="w",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=("#4ea8f5", "#4ea8f5"),
+            ).grid(row=row, column=1, sticky="w", padx=(12, 0), pady=1)
+
+        self._timing_frame.grid()
 
     def _hide_stop_btn(self):
         if hasattr(self, "_stop_btn"):
