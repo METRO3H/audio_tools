@@ -1,41 +1,61 @@
-# Python
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
 
-# Virtual environment
+# ── Virtual environment ───────────────────────────────────────────────────────
 .venv/
 venv/
 env/
 
-# ffmpeg binarios (pesan mucho, cada quien tiene el suyo)
+# ── ffmpeg (pesa mucho, cada quien tiene el suyo) ─────────────────────────────
 ffmpeg/
 
-# Temporales del proyecto
+# ── Temporales del proyecto ───────────────────────────────────────────────────
 _concat_list.txt
 
-# Tests manuales
+# ── Tests manuales ────────────────────────────────────────────────────────────
 test/
 test_*.py
 
-# IDEs
-.vscode/
-.idea/
+# ── ML models ─────────────────────────────────────────────────────────────────
+models/
 
-# Windows
-Thumbs.db
-desktop.ini
-
-# Compilation
+# ── Build / distribución ──────────────────────────────────────────────────────
 build/
 dist/
+dist_ui/
 *.spec
 *.egg-info/
 
+# ── Frontend ──────────────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/dist/
+frontend/dist-ssr/
+frontend/*.local
 
-# General
+# ── IDEs ──────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+
+# ── Windows ───────────────────────────────────────────────────────────────────
+Thumbs.db
+desktop.ini
+
+# ── General ───────────────────────────────────────────────────────────────────
 *.log
 *.txt
 
-# ml models
-models/
+
+# ── Assets pesados ────────────────────────────────────────────────────────────
+frontend/src/**/*.png
+frontend/src/**/*.jpg
+frontend/src/**/*.jpeg
+frontend/src/**/*.webp
+frontend/static/**/*.png
+frontend/static/**/*.jpg
+frontend/static/**/*.jpeg
+frontend/static/**/*.webp
+frontend/public/**/*.svg
+frontend/src/**/*.svg
