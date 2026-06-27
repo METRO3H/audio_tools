@@ -14,23 +14,27 @@
  *   await appConfig.init()        // carga config desde el backend
  */
 
-import { bridge } from './bridge.svelte.js'
+import { bridge } from "./bridge.svelte.js";
 
 // ── Estado ─────────────────────────────────────────────────────────────────────
 
 export const appConfig = $state({
   baseFolder: '',
+  defaultBaseFolder: '',
   loaded: false,
 
-  /** Carga la configuración inicial desde el backend. */
   async init() {
     const cfg = await bridge.get_config()
     this.baseFolder = cfg.default_base_folder
+    this.defaultBaseFolder = cfg.default_base_folder
     this.loaded = true
   },
 
-  /** Actualiza la carpeta base (persiste en memoria; extensible a backend). */
   setBaseFolder(path) {
     this.baseFolder = path
+  },
+
+  resetBaseFolder() {
+    this.baseFolder = this.defaultBaseFolder
   },
 })

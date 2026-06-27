@@ -83,9 +83,16 @@ class AudioToolsAPI:
         return get_duration(config.FFPROBE_BIN, Path(file_path))
 
     def cancel(self) -> None:
-        """Cancela la operación ffmpeg en curso."""
+        """Cancela la operación en curso. Usa kill() como fallback en Windows."""
         self._ffmpeg.cancel()
         self._whisper.cancel()
+
+        # Fallback: si el proceso sigue vivo tras terminate(), lo mata
+        import sys
+        if sys.platform == "win32":
+            proc = getattr(self._ffmpeg, '_process', None)
+            if proc and proc.poll() is None:
+                proc.kill()
 
     # ── Merge ──────────────────────────────────────────────────────────────────
 
@@ -94,15 +101,8 @@ class AudioToolsAPI:
         file_paths: list[str],
         output_path: str,
         base_folder: str,
+        durations: list[float],
     ) -> None:
-        """
-        Fusiona varios archivos de audio en uno.
-
-        Parámetros JS:
-            file_paths   lista de rutas absolutas
-            output_path  ruta del archivo de salida
-            base_folder  carpeta base del proyecto
-        """
         config_ = MergeAudioConfig(
             input_files=_paths(file_paths),
             output_file=Path(output_path),
@@ -110,16 +110,55 @@ class AudioToolsAPI:
         )
         action = MergeAudioAction()
         args = action.build_args(config_)
+        total_duration = sum(durations)
+
+        # Inferencia de archivo activo basada en tiempo acumulado
+        active_idx = [0]
+        accumulated = [0.0]  # tiempo acumulado antes del archivo activo
 
         def on_log(msg: str):
             _emit(self._window, "audiotools:log", {"message": msg})
 
         def on_progress(value: float):
-            _emit(self._window, "audiotools:progress", {"value": value})
+            # value = elapsed_global / total_duration (0..1)
+            elapsed = value * total_duration
+
+            # Determinar qué archivo está siendo procesado
+            acc = 0.0
+            for i, dur in enumerate(durations):
+                if elapsed < acc + dur:
+                    active_idx[0] = i
+                    accumulated[0] = acc
+                    break
+                acc += dur
+            else:
+                active_idx[0] = len(durations) - 1
+                accumulated[0] = total_duration - durations[-1]
+
+            # Progreso individual del archivo activo
+            file_dur = durations[active_idx[0]]
+            file_elapsed = elapsed - accumulated[0]
+            file_progress = min(file_elapsed / file_dur, 1.0) if file_dur > 0 else 0.0
+
+            # Archivos completados = todos los anteriores al activo
+            completed = active_idx[0]
+
+            _emit(self._window, "audiotools:progress", {
+                "value": value,
+                "file_index": active_idx[0],
+                "file_progress": file_progress,
+                "completed": completed,
+                "total": len(durations),
+            })
 
         def on_done(success: bool):
             if success:
-                action.add_chapters(config_)
+                action.add_chapters(
+                    output_file=Path(output_path),
+                    input_files=_paths(file_paths),
+                    durations=durations,
+                    ffmpeg_bin=config.FFMPEG_BIN,
+                )
             action.cleanup()
             _emit(self._window, "audiotools:done", {"success": success})
 
@@ -128,6 +167,7 @@ class AudioToolsAPI:
             on_log=on_log,
             on_done=on_done,
             on_progress=on_progress,
+            duration=total_duration,
         )
 
     # ── Diverge ────────────────────────────────────────────────────────────────
@@ -303,39 +343,75 @@ class AudioToolsAPI:
         )
 
     # ── Diálogos nativos ───────────────────────────────────────────────────────
+    def pick_files(self, file_types: list[str] | None = None, base_folder: str | None = None) -> list[str]:
+        if file_types:
+            exts = ";".join(file_types)
+            types = (f"Audio files ({exts})", "All files (*.*)")
+        else:
+            types = ("All files (*.*)",)
 
-    def pick_files(self, file_types: list[str] | None = None) -> list[str]:
-        """
-        Abre el diálogo nativo de selección de archivos.
-        Devuelve lista de rutas absolutas (strings) o [] si se canceló.
+        # Abre en base_folder/audios si existe, si no en base_folder
+        directory = str(config.DEFAULT_BASE_FOLDER)
+        if base_folder:
+            audios_dir = Path(base_folder) / 'audios'
+            directory = str(audios_dir) if audios_dir.is_dir() else base_folder
 
-        Parámetros JS:
-            file_types  lista de extensiones (ej: ["*.mp3", "*.opus"])
-                        o null para todos los archivos
-        """
-        types = tuple(file_types) if file_types else webview.OPEN_DIALOG
         result = self._window.create_file_dialog(
             webview.OPEN_DIALOG,
             allow_multiple=True,
-            file_types=(("Audio files", " ".join(file_types)),) if file_types else (),
+            file_types=types,
+            directory=directory,
         )
         return list(result) if result else []
 
-    def pick_folder(self) -> str | None:
-        """
-        Abre el diálogo nativo de selección de carpeta.
-        Devuelve la ruta o null si se canceló.
-        """
-        result = self._window.create_file_dialog(webview.FOLDER_DIALOG)
-        return result[0] if result else None
+    def pick_image(self, base_folder: str | None = None) -> str | None:
+        directory = str(config.DEFAULT_BASE_FOLDER)
+        if base_folder:
+            images_dir = Path(base_folder) / 'images'
+            directory = str(images_dir) if images_dir.is_dir() else base_folder
 
-    def pick_image(self) -> str | None:
-        """
-        Abre el diálogo nativo para seleccionar una imagen de fondo.
-        Devuelve la ruta o null si se canceló.
-        """
         result = self._window.create_file_dialog(
             webview.OPEN_DIALOG,
-            file_types=(("Images", "*.png *.jpg *.jpeg *.webp"),),
+            file_types=("Image files (*.png;*.jpg;*.jpeg;*.webp)", "All files (*.*)"),
+            directory=directory,
         )
         return result[0] if result else None
+
+    def pick_folder(self) -> str | None:
+        result = self._window.create_file_dialog(
+            webview.FOLDER_DIALOG,
+            directory=str(config.DEFAULT_BASE_FOLDER),
+        )
+        return result[0] if result else None
+
+    def scan_audio_folder(self, folder_path: str) -> dict:
+        """
+        Escanea ./audios dentro de folder_path.
+        Retorna { files: [...], error: str | None }
+        """
+        AUDIO_EXTS = {'.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus'}
+        audios_dir = Path(folder_path) / 'audios'
+
+        if not audios_dir.is_dir():
+            return { 'files': [], 'error': 'No existe la carpeta ./audios' }
+
+        files = sorted(
+            [f for f in audios_dir.iterdir() if f.is_file() and f.suffix.lower() in AUDIO_EXTS],
+            key=lambda f: f.name,
+        )
+        return { 'files': [str(f) for f in files], 'error': None }
+    
+    
+    def get_file_info(self, file_path: str) -> dict:
+        """
+        Devuelve metadata básica de un archivo.
+        Retorna: { name, size_mb, duration_seconds }
+        """
+        p = Path(file_path)
+        size_mb = round(p.stat().st_size / (1024 * 1024), 2)
+        duration = get_duration(config.FFPROBE_BIN, p)
+        return {
+            "name": p.name,
+            "size_mb": size_mb,
+            "duration_seconds": duration,
+        }

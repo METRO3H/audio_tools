@@ -1,129 +1,228 @@
 <script>
-  /**
-   * MergeView.svelte
-   * ─────────────────
-   * Fusiona varios archivos de audio en uno solo con capítulos.
-   *
-   * Props:
-   *   goHome  function — vuelve a la pantalla de inicio
-   */
+   import { bridge } from "$lib/stores/bridge.svelte.js";
+   import { progress } from "$lib/stores/progress.svelte.js";
+   import { appConfig } from "$lib/stores/config.svelte.js";
 
-  import { bridge }    from '$lib/stores/bridge.svelte.js'
-  import { progress }  from '$lib/stores/progress.svelte.js'
-  import { appConfig } from '$lib/stores/config.svelte.js'
+   import ProcessingView from "$lib/views/shared/ProcessingView.svelte";
+   import ViewHeader from "$lib/views/shared/ViewHeader.svelte";
 
-  import FileDropZone from '$lib/components/FileDropZone.svelte'
-  import ProgressBar  from '$lib/components/ProgressBar.svelte'
-  import LogPanel     from '$lib/components/LogPanel.svelte'
+   let { goHome } = $props();
 
-  let { goHome } = $props()
+   const FORMATS = ["mp3", "wav", "aac", "m4a", "ogg", "flac", "opus"];
+   const AUDIO_EXTS = ["*.mp3", "*.wav", "*.m4a", "*.aac", "*.ogg", "*.flac", "*.opus"];
 
-  // ── Estado local ────────────────────────────────────────────────────────────
+   // ── Estado ──────────────────────────────────────────────────────────────────
 
-  let files      = $state([])
-  let outputName = $state('merged.opus')
+   let processing = $state(false);
+   let fileInfos = $state([]);
+   let outputName = $state("");
+   let outputFormat = $state("opus");
+   let autoHint = $state("");
 
-  const canRun = $derived(
-    files.length >= 2 &&
-    outputName.trim() &&
-    appConfig.baseFolder &&
-    !progress.running
-  )
+   // ── Helpers ─────────────────────────────────────────────────────────────────
 
-  // ── Acciones ────────────────────────────────────────────────────────────────
+   function basename(path) {
+      return path?.split(/[\\/]/).pop() ?? "";
+   }
 
-  async function run() {
-    if (!canRun) return
-    progress.reset()
+   function folderName(path) {
+      return path?.split(/[\\/]/).pop() ?? "";
+   }
 
-    const outputPath = `${appConfig.baseFolder}\\${outputName}`
-    await bridge.run_merge(files, outputPath, appConfig.baseFolder)
-  }
+   // ── Auto-carga al cambiar carpeta base ──────────────────────────────────────
 
-  function cancel() {
-    bridge.cancel()
-  }
+   async function loadAudios(folder) {
+      const result = await bridge.scan_audio_folder(folder);
+      if (result.error) {
+         fileInfos = [];
+         autoHint = `⚠ ${result.error}`;
+         return;
+      }
+      if (!result.files.length) {
+         fileInfos = [];
+         autoHint = "⚠ No se encontraron audios en ./audios";
+         return;
+      }
+      const infos = await Promise.all(result.files.map((p) => bridge.get_file_info(p)));
+      fileInfos = infos.map((info, i) => ({ ...info, path: result.files[i] }));
+      autoHint = `✓ ${infos.length} archivo(s) detectados en ./audios`;
+      if (!outputName) outputName = folderName(folder);
+   }
+
+   // ── Selección manual ────────────────────────────────────────────────────────
+
+   async function pickFiles() {
+      const paths = await bridge.pick_files(AUDIO_EXTS, appConfig.baseFolder);
+      if (!paths.length) return;
+      const infos = await Promise.all(paths.map((p) => bridge.get_file_info(p)));
+      fileInfos = infos.map((info, i) => ({ ...info, path: paths[i] }));
+      autoHint = "";
+      if (!outputName) outputName = folderName(appConfig.baseFolder);
+   }
+
+   async function pickBaseFolder() {
+      const folder = await bridge.pick_folder();
+      if (!folder) return;
+      appConfig.setBaseFolder(folder);
+      outputName = "";
+      await loadAudios(folder);
+   }
+
+   function removeFile(path) {
+      fileInfos = fileInfos.filter((f) => f.path !== path);
+   }
+
+   // ── Output ──────────────────────────────────────────────────────────────────
+
+   function getOutputPath() {
+      if (!fileInfos.length) return "";
+      const name = outputName || folderName(appConfig.baseFolder);
+      const audioDir = fileInfos[0].path.substring(0, fileInfos[0].path.lastIndexOf("\\") + 1);
+      return `${audioDir}${name}.${outputFormat}`;
+   }
+
+   // ── Validación ──────────────────────────────────────────────────────────────
+
+   const canRun = $derived(fileInfos.length >= 2 && !!appConfig.baseFolder && !progress.running);
+
+   // ── Ejecutar ────────────────────────────────────────────────────────────────
+
+   async function run() {
+      if (!canRun) return;
+      progress.reset();
+      processing = true;
+      progress.running = true;
+      const outPath = getOutputPath();
+      const durations = fileInfos.map((f) => f.duration_seconds);
+      const paths = fileInfos.map((f) => f.path);
+
+      await bridge.run_merge(paths, outPath, appConfig.baseFolder, durations);
+   }
+
+   function cancel() {
+      bridge.cancel();
+   }
+
+   function goBack() {
+      processing = false;
+      progress.reset();
+   }
 </script>
 
-<div class="flex h-full flex-col">
+{#if processing}
+   <ProcessingView title="Merge" {goHome} {fileInfos} onCancel={cancel} onBack={goBack} />
+{:else}
+   <div class="flex h-full flex-col">
+      <ViewHeader title="Merge" {goHome} />
 
-  <!-- Header -->
-  <header class="flex items-center gap-3 border-b border-white/5 px-8 py-5">
-    <button
-      class="text-white/30 hover:text-white transition-colors text-sm"
-      onclick={goHome}
-    >
-      ← Inicio
-    </button>
-    <span class="text-white/10">/</span>
-    <h1 class="text-sm font-semibold">Merge</h1>
-  </header>
+      <main class="flex flex-1 flex-col items-center justify-center px-8 py-6">
+         <div class="flex w-full max-w-md flex-col gap-5">
+            <!-- Carpeta base -->
+            <div class="flex flex-col gap-1.5">
+               <span class="text-xs text-white/40">Carpeta base</span>
+               <button
+                  class="flex items-center gap-2 rounded-lg border border-white/10
+                   bg-white/5 px-3 py-2 text-xs text-left transition-all
+                   hover:border-white/20"
+                  onclick={pickBaseFolder}
+               >
+                  <span>📁</span>
+                  <span class="truncate text-white/60">
+                     {appConfig.baseFolder || "Sin seleccionar"}
+                  </span>
+               </button>
+            </div>
 
-  <!-- Contenido -->
-  <main class="flex flex-1 gap-6 overflow-hidden px-8 py-6">
+            <!-- Archivos -->
+            <div class="flex flex-col gap-1.5">
+               <div class="flex items-center justify-between">
+                  <span class="text-xs text-white/40">
+                     Archivos
+                     {#if fileInfos.length}
+                        <span class="text-white/20">({fileInfos.length})</span>
+                     {/if}
+                  </span>
+                  <button class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors" onclick={pickFiles}>
+                     Seleccionar manualmente
+                  </button>
+               </div>
 
-    <!-- Panel izquierdo: configuración -->
-    <section class="flex w-80 shrink-0 flex-col gap-5">
+               {#if autoHint}
+                  <span class="text-xs text-emerald-400">{autoHint}</span>
+               {/if}
 
-      <FileDropZone
-        bind:files
-        accept={['*.mp3', '*.opus', '*.m4a', '*.wav', '*.flac', '*.ogg']}
-        disabled={progress.running}
-      />
+               {#if fileInfos.length}
+                  <ul class="flex flex-col gap-1 max-h-48 overflow-y-auto">
+                     {#each fileInfos as file (file.path)}
+                        <li
+                           class="flex items-center justify-between rounded-lg
+                           bg-white/5 px-3 py-1.5 text-xs text-white/60"
+                        >
+                           <span class="truncate">{file.name}</span>
+                           <div class="flex shrink-0 items-center gap-2 ml-2">
+                              <span class="text-white/30">{file.size_mb} MB</span>
+                              <button
+                                 class="text-white/20 hover:text-red-400 transition-colors"
+                                 onclick={() => removeFile(file.path)}
+                              >
+                                 ✕
+                              </button>
+                           </div>
+                        </li>
+                     {/each}
+                  </ul>
+               {:else}
+                  <div
+                     class="rounded-lg border border-dashed border-white/10 p-4
+                        text-center text-xs text-white/20"
+                  >
+                     {appConfig.baseFolder
+                        ? "No se encontraron audios en ./audios"
+                        : "Selecciona una carpeta base primero"}
+                  </div>
+               {/if}
+            </div>
 
-      <!-- Nombre del archivo de salida -->
-      <div class="flex flex-col gap-1.5">
-        <label class="text-xs text-white/40" for="output-name">
-          Nombre de salida
-        </label>
-        <input
-          id="output-name"
-          type="text"
-          bind:value={outputName}
-          disabled={progress.running}
-          placeholder="merged.opus"
-          class="rounded-lg border border-white/10 bg-white/5 px-3 py-2
-                 text-sm text-white placeholder-white/20 outline-none
-                 focus:border-indigo-500/50 transition-colors
-                 disabled:opacity-40"
-        />
-      </div>
+            <!-- Nombre y formato -->
+            <div class="flex flex-col gap-1.5">
+               <span class="text-xs text-white/40">Nombre de salida</span>
+               <div class="flex gap-2">
+                  <input
+                     type="text"
+                     bind:value={outputName}
+                     placeholder={folderName(appConfig.baseFolder) || "nombre"}
+                     class="flex-1 rounded-lg border border-white/10 bg-white/5 px-3 py-2
+                     text-sm text-white placeholder-white/20 outline-none
+                     focus:border-indigo-500/50 transition-colors"
+                  />
+                  <select
+                     bind:value={outputFormat}
+                     class="rounded-lg border border-white/10 bg-zinc-900 px-2 py-2
+                     text-xs text-white/70 outline-none focus:border-indigo-500/50"
+                  >
+                     {#each FORMATS as fmt (fmt)}
+                        <option value={fmt}>{fmt}</option>
+                     {/each}
+                  </select>
+               </div>
+               {#if fileInfos.length && appConfig.baseFolder}
+                  <span class="text-xs text-white/20 truncate">
+                     → {basename(getOutputPath())}
+                  </span>
+               {/if}
+            </div>
 
-      <!-- Botones -->
-      <div class="flex gap-2 mt-auto">
-        {#if progress.running}
-          <button
-            class="flex-1 rounded-lg bg-red-500/20 px-4 py-2 text-sm
-                   text-red-400 hover:bg-red-500/30 transition-colors"
-            onclick={cancel}
-          >
-            Cancelar
-          </button>
-        {:else}
-          <button
-            class="flex-1 rounded-lg bg-indigo-600 px-4 py-2 text-sm
-                   font-medium text-white transition-colors
-                   hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed"
-            onclick={run}
-            disabled={!canRun}
-          >
-            Fusionar
-          </button>
-        {/if}
-      </div>
-
-    </section>
-
-    <!-- Panel derecho: progreso -->
-    <section class="flex flex-1 flex-col gap-4">
-      <ProgressBar
-        value={progress.value}
-        running={progress.running}
-        success={progress.success}
-      />
-      <LogPanel logs={progress.logs} />
-    </section>
-
-  </main>
-
-</div>
+            <!-- Botón -->
+            <button
+               class="w-full rounded-lg bg-indigo-600 py-2.5 text-sm font-medium
+                 text-white transition-colors hover:bg-indigo-500
+                 disabled:opacity-30 disabled:cursor-not-allowed"
+               onclick={run}
+               disabled={!canRun}
+            >
+               Ejecutar merge
+            </button>
+         </div>
+      </main>
+   </div>
+{/if}
