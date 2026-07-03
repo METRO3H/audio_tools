@@ -1,18 +1,12 @@
-"""
-main.py
-────────
-Punto de entrada de la aplicación.
-Lanza pywebview apuntando al dist_ui/ compilado por Vite.
-"""
-
 import webview
-from api import AudioToolsAPI
 import ctypes
+import sys
+from api import AudioToolsAPI
 
 def get_screen_center(width, height):
     user32 = ctypes.windll.user32
-    sw = user32.GetSystemMetrics(0)  # ancho de pantalla
-    sh = user32.GetSystemMetrics(1)  # alto de pantalla
+    sw = user32.GetSystemMetrics(0)
+    sh = user32.GetSystemMetrics(1)
     x = (sw - width) // 2
     y = (sh - height) // 2
     return x, y
@@ -36,9 +30,13 @@ def main():
         y         = y,
     )
 
-    api.set_window(window)
+    def on_closing():
+        """Cancela cualquier proceso en curso antes de cerrar."""
+        api.cancel()
 
-    webview.start(debug=True)
+    window.events.closing += on_closing
+    api.set_window(window)
+    webview.start(debug=False)
 
 if __name__ == '__main__':
     main()
