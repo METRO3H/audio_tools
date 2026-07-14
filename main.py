@@ -1,7 +1,8 @@
-import webview
-import ctypes
 import sys
+import ctypes
+import webview
 from api import AudioToolsAPI
+
 
 def get_screen_center(width, height):
     user32 = ctypes.windll.user32
@@ -11,7 +12,10 @@ def get_screen_center(width, height):
     y = (sh - height) // 2
     return x, y
 
+
 def main():
+    debug = "--debug" in sys.argv
+
     api = AudioToolsAPI()
 
     W, H = 960, 640
@@ -31,12 +35,12 @@ def main():
     )
 
     def on_closing():
-        """Cancela cualquier proceso en curso antes de cerrar."""
         api.cancel()
 
     window.events.closing += on_closing
     api.set_window(window)
-    webview.start(debug=False)
+    webview.start(debug=debug)
+
 
 if __name__ == '__main__':
     main()

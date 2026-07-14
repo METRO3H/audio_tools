@@ -160,6 +160,14 @@ class AudioToolsAPI:
                     durations=durations,
                     ffmpeg_bin=config.FFMPEG_BIN,
                 )
+            else:
+                # Elimina el archivo de salida incompleto si el proceso fue cancelado
+                out = Path(output_path)
+                if out.exists():
+                    try:
+                        out.unlink()
+                    except Exception:
+                        pass
             action.cleanup()
             _emit(self._window, "audiotools:done", {"success": success})
 
@@ -410,15 +418,23 @@ class AudioToolsAPI:
         return {'files': [str(f) for f in files], 'error': None}
 
     def get_file_info(self, file_path: str) -> dict:
-        """
-        Devuelve metadata básica de un archivo.
-        Retorna: { name, size_mb, duration_seconds }
-        """
         p = Path(file_path)
         size_mb = round(p.stat().st_size / (1024 * 1024), 2)
-        duration = get_duration(config.FFPROBE_BIN, p)
+        try:
+            duration = get_duration(config.FFPROBE_BIN, p)
+        except (ValueError, Exception):
+            duration = 0.0
         return {
             "name": p.name,
             "size_mb": size_mb,
             "duration_seconds": duration,
         }
+    def open_file(self, file_path: str) -> None:
+        """Abre el archivo con la aplicación predeterminada del sistema."""
+        import os
+        os.startfile(file_path)
+
+    def open_folder(self, file_path: str) -> None:
+        """Abre la carpeta que contiene el archivo y lo selecciona."""
+        import subprocess
+        subprocess.Popen(['explorer', '/select,', file_path])

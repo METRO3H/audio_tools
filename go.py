@@ -1,8 +1,10 @@
 """
 go.py
 ──────
-    py go.py           # lanza la app con el build actual
-    py go.py --build   # compila el frontend y lanza la app
+    py go.py              # lanza la app
+    py go.py --build      # compila el frontend y lanza
+    py go.py --debug      # lanza con DevTools
+    py go.py --build --debug  # compila y lanza con DevTools
 """
 
 import subprocess
@@ -27,10 +29,10 @@ def build():
 
 
 def run():
-    subprocess.run(
-        [sys.executable, str(ROOT / "main.py")],
-        cwd=ROOT,
-    )
+    args = [sys.executable, str(ROOT / "main.py")]
+    if "--debug" in sys.argv:
+        args.append("--debug")
+    subprocess.run(args, cwd=ROOT)
 
 
 if __name__ == "__main__":
