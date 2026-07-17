@@ -19,9 +19,16 @@ class DivergeAudioConfig:
 
 @dataclass
 class AudioToVideoConfig:
-    input_files: list[Path]
-    base_folder: Path
+    input_files:      list[Path]
+    base_folder:      Path
     background_image: Path | None
+    encoder:          str   = "cpu"       # cpu | nvidia | amd | intel
+    fps:              int   = 1
+    crf:              int   = 23
+    preset:           str   = "medium"
+    resolution:       str   = "1280x720"  # usado solo si no hay imagen
+    copy_audio:       bool  = True
+
 
 
 @dataclass

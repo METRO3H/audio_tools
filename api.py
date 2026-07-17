@@ -23,17 +23,19 @@ import webview
 import config
 from core.actions.merge_audio import MergeAudioAction
 from core.actions.diverge_audio import DivergeAudioAction
-from core.actions.audio_to_video import AudioToVideoAction
+from core.actions.audio_to_video import AudioToVideoAction, ENCODERS
 from core.transcription.transcribe_action import TranscribeAction
 from core.transcription.whisper_runner import WhisperRunner
 from core.ffmpeg_runner import FFmpegRunner
-from core.media_info import get_duration
+from core.media_info import get_duration, get_chapters
 from core.models import (
     MergeAudioConfig,
     DivergeAudioConfig,
     AudioToVideoConfig,
     TranscribeConfig,
 )
+
+from util.image_optimizer import optimize_image, SUPPORTED_EXTS
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -187,16 +189,20 @@ class AudioToolsAPI:
         base_folder: str,
         interval_seconds: int,
         output_format: str,
+        chapters: list[dict] | None = None,
     ) -> None:
         """
-        Divide un archivo de audio en segmentos de igual duración.
+        Divide un archivo en segmentos.
 
         Parámetros JS:
             file_path        ruta absoluta del archivo fuente
             base_folder      carpeta base del proyecto
-            interval_seconds duración de cada segmento en segundos
-            output_format    extensión de salida (ej: "mp3", "opus")
+            interval_seconds duración de cada segmento en segundos (usado si chapters es None)
+            output_format    extensión de salida
+            chapters         lista de chapters (o null para intervalo fijo)
         """
+        from core.models import DivergeAudioConfig
+
         input_file = Path(file_path)
         duration = get_duration(config.FFPROBE_BIN, input_file)
 
@@ -207,8 +213,11 @@ class AudioToolsAPI:
             output_format=output_format,
         )
         action = DivergeAudioAction()
-        args_list = action.build_args_list(config_, duration)
-        durations = [interval_seconds] * len(args_list)
+        args_list = action.build_args_list(config_, duration, chapters or None)
+        durations = [
+            (ch["end"] - ch["start"]) if chapters else interval_seconds
+            for ch in (chapters or [None] * len(args_list))
+        ]
 
         def on_log(msg: str):
             _emit(self._window, "audiotools:log", {"message": msg})
@@ -217,10 +226,22 @@ class AudioToolsAPI:
             _emit(self._window, "audiotools:progress", {"value": value})
 
         def on_file_start(i: int):
-            _emit(self._window, "audiotools:file", {"index": i, "done": False})
+            _emit(self._window, "audiotools:progress", {
+                "value": i / len(args_list),
+                "file_index": i,
+                "file_progress": 0,
+                "completed": i,
+                "total": len(args_list),
+            })
 
         def on_file_done(i: int):
-            _emit(self._window, "audiotools:file", {"index": i, "done": True})
+            _emit(self._window, "audiotools:progress", {
+                "value": (i + 1) / len(args_list),
+                "file_index": i,
+                "file_progress": 1,
+                "completed": i + 1,
+                "total": len(args_list),
+            })
 
         def on_done(success: bool):
             _emit(self._window, "audiotools:done", {"success": success})
@@ -239,23 +260,30 @@ class AudioToolsAPI:
 
     def run_audio_to_video(
         self,
-        file_paths: list[str],
-        base_folder: str,
+        file_paths:       list[str],
+        base_folder:      str,
         background_image: str | None = None,
+        encoder:          str = "cpu",
+        fps:              int = 1,
+        crf:              int = 23,
+        preset:           str = "medium",
+        resolution:       str = "1280x720",
+        copy_audio:       bool = True,
     ) -> None:
-        """
-        Convierte archivos de audio a video con imagen de fondo estática.
+        from core.actions.audio_to_video import AudioToVideoAction
+        from core.models import AudioToVideoConfig
 
-        Parámetros JS:
-            file_paths         lista de rutas de audio
-            base_folder        carpeta base del proyecto
-            background_image   ruta de la imagen (o null)
-        """
         config_ = AudioToVideoConfig(
             input_files=_paths(file_paths),
             base_folder=Path(base_folder),
             background_image=Path(
                 background_image) if background_image else None,
+            encoder=encoder,
+            fps=fps,
+            crf=crf,
+            preset=preset,
+            resolution=resolution,
+            copy_audio=copy_audio,
         )
         action = AudioToVideoAction()
         args_list = action.build_args_list(config_)
@@ -267,18 +295,52 @@ class AudioToolsAPI:
         def on_log(msg: str):
             _emit(self._window, "audiotools:log", {"message": msg})
 
+        progress_state = {'current': 0}
+
         def on_progress(value: float):
-            _emit(self._window, "audiotools:progress", {"value": value})
+            current = progress_state['current']
+            total = len(args_list)
+            global_value = (current + value) / total
+            print(f"[DEBUG] on_progress: value={value:.3f} current={current} global={global_value:.3f}", flush=True)
+            _emit(self._window, "audiotools:progress", {
+                "value":         global_value,
+                "file_index":    current,
+                "file_progress": value,
+                "completed":     current,
+                "total":         total,
+            })
 
         def on_file_start(i: int):
-            _emit(self._window, "audiotools:file", {"index": i, "done": False})
+            progress_state['current'] = i
+            _emit(self._window, "audiotools:progress", {
+                "value":         i / len(args_list),
+                "file_index":    i,
+                "file_progress": 0,
+                "completed":     i,
+                "total":         len(args_list),
+            })
 
         def on_file_done(i: int):
-            _emit(self._window, "audiotools:file", {"index": i, "done": True})
+            _emit(self._window, "audiotools:progress", {
+                "value":         (i + 1) / len(args_list),
+                "file_index":    i,
+                "file_progress": 1,
+                "completed":     i + 1,
+                "total":         len(args_list),
+            })
 
         def on_done(success: bool):
+            elapsed = time.time() - start_time
+            print(f"[DEBUG A2V] done success={success} elapsed={elapsed:.1f}s", flush=True)
             _emit(self._window, "audiotools:done", {"success": success})
 
+        
+        import time
+        print(f"[DEBUG A2V] encoder={encoder} fps={fps} crf={crf} preset={preset} resolution={resolution} copy_audio={copy_audio}", flush=True)
+        print(f"[DEBUG A2V] background_image={background_image}", flush=True)
+        print(f"[DEBUG A2V] args_list[0]={args_list[0]}", flush=True)
+        start_time = time.time()
+        
         self._ffmpeg.run_sequential(
             args_list=args_list,
             on_log=on_log,
@@ -428,7 +490,9 @@ class AudioToolsAPI:
             "name": p.name,
             "size_mb": size_mb,
             "duration_seconds": duration,
+            "path": str(p),
         }
+
     def open_file(self, file_path: str) -> None:
         """Abre el archivo con la aplicación predeterminada del sistema."""
         import os
@@ -438,3 +502,129 @@ class AudioToolsAPI:
         """Abre la carpeta que contiene el archivo y lo selecciona."""
         import subprocess
         subprocess.Popen(['explorer', '/select,', file_path])
+
+    def get_chapters_for_file(self, file_path: str) -> list[dict]:
+        """
+        Retorna los chapters de un archivo.
+        Lista vacía si no tiene chapters.
+        """
+        return get_chapters(config.FFPROBE_BIN, Path(file_path))
+
+    def get_file_for_diverge(self, base_folder: str) -> dict | None:
+        """
+        Auto-detecta el archivo a diverger en base_folder/audios/:
+          1. Busca el archivo cuyo stem coincide con el nombre de la carpeta base
+          2. Si no, retorna el de mayor duración
+          3. Si no hay archivos, retorna None
+
+        Retorna { name, size_mb, duration_seconds, path } o None.
+        """
+        AUDIO_EXTS = {'.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus'}
+        base = Path(base_folder)
+        audios_dir = base / 'audios'
+
+        if not audios_dir.is_dir():
+            return None
+
+        files = [f for f in audios_dir.iterdir()
+                 if f.is_file() and f.suffix.lower() in AUDIO_EXTS]
+        if not files:
+            return None
+
+        # Prioridad 1: nombre igual al de la carpeta base
+        folder_name = base.name
+        match = next((f for f in files if f.stem == folder_name), None)
+        target = match if match else max(
+            files,
+            key=lambda f: get_duration(config.FFPROBE_BIN, f)
+        )
+
+        return self.get_file_info(str(target))
+
+    def detect_encoders(self) -> dict:
+        import subprocess
+        from core.actions.audio_to_video import ENCODERS
+
+        available = {"cpu": True}
+        for key, encoder in ENCODERS.items():
+            if key == "cpu":
+                continue
+            try:
+                result = subprocess.run(
+                    [
+                        str(config.FFMPEG_BIN),
+                        "-f", "lavfi", "-i", "color=c=black:s=320x240:r=1",
+                        "-t", "0.1",
+                        "-c:v", encoder,
+                        "-f", "null", "-",
+                    ],
+                    capture_output=True,
+                    timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                available[key] = result.returncode == 0
+            except Exception as e:
+                print(f"[DEBUG] encoder={encoder} exception={e}", flush=True)
+                available[key] = False
+
+        return available
+    def scan_images_folder(self, base_folder: str) -> dict | None:
+        """
+        Busca la imagen más pequeña en base_folder/images/.
+        Si supera 200kb, la optimiza con image_optimizer.
+        Retorna { path, name, optimized } o None si no hay imágenes.
+        """
+        from util.image_optimizer import optimize_image, SUPPORTED_EXTS
+
+        images_dir = Path(base_folder) / "images"
+        if not images_dir.is_dir():
+            return None
+
+        images = [
+            f for f in images_dir.iterdir()
+            if f.is_file() and f.suffix.lower() in SUPPORTED_EXTS
+            and "_opt" not in f.stem  # excluir las ya optimizadas
+        ]
+        if not images:
+            return None
+
+        smallest = min(images, key=lambda f: f.stat().st_size)
+        optimized_path = optimize_image(smallest)
+        optimized = optimized_path != smallest
+
+        return {
+            "path":      str(optimized_path),
+            "name":      optimized_path.name,
+            "optimized": optimized,
+        }
+
+    def scan_audio_parts_or_audios(self, base_folder: str) -> dict:
+        """
+        Busca audios en ./audios/parts primero.
+        Si no existe o está vacía, busca en ./audios.
+        Retorna { files: [...], source: str, error: str | None }
+        """
+        AUDIO_EXTS = {'.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus'}
+        base = Path(base_folder)
+
+        for subfolder in ['audios/parts', 'audios']:
+            target = base / subfolder
+            if not target.is_dir():
+                continue
+            files = sorted(
+                [f for f in target.iterdir()
+                 if f.is_file() and f.suffix.lower() in AUDIO_EXTS],
+                key=lambda f: f.name,
+            )
+            if files:
+                return {
+                    'files':  [str(f) for f in files],
+                    'source': f'./{subfolder}',
+                    'error':  None,
+                }
+
+        return {
+            'files':  [],
+            'source': '',
+            'error':  'No se encontraron audios en ./audios/parts ni ./audios',
+        }

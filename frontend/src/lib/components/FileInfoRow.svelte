@@ -3,18 +3,18 @@
    * FileInfoRow.svelte
    * ───────────────────
    * Fila de archivo en la vista de procesamiento.
-   * Muestra nombre, peso, duración y barra de progreso individual.
+   * Muestra nombre, peso (si existe), duración y barra de progreso individual.
    *
    * Props:
    *   name      string  — nombre del archivo
-   *   sizeMb    number  — peso en MB
+   *   sizeMb    number  — peso en MB (0 o null = no mostrar)
    *   duration  number  — duración en segundos
    *   progress  number  — 0..1 (null = en cola, 1 = completado)
    *   active    boolean — si está siendo procesado ahora
    *   done      boolean — si ya terminó
    */
 
-  let { name, sizeMb, duration, progress = null, active = false, done = false } = $props()
+  let { name, sizeMb = 0, duration, progress = null, active = false, done = false } = $props()
 
   function formatDuration(seconds) {
     const h = Math.floor(seconds / 3600)
@@ -35,11 +35,13 @@
 
 <div class="flex flex-col gap-1.5 rounded-lg border px-4 py-3 transition-all duration-300 {rowColor}">
 
-  <!-- Fila superior: nombre, peso, duración -->
+  <!-- Fila superior: nombre, peso (opcional), duración -->
   <div class="flex items-center justify-between gap-4">
     <span class="truncate text-xs font-medium text-white/80">{name}</span>
     <div class="flex shrink-0 items-center gap-3 text-xs text-white/30">
-      <span>{sizeMb} MB</span>
+      {#if sizeMb > 0}
+        <span>{sizeMb} MB</span>
+      {/if}
       <span>{formatDuration(duration)}</span>
       {#if done}
         <span class="text-emerald-400">✓</span>
