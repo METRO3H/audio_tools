@@ -19,22 +19,23 @@ import { bridge } from "./bridge.svelte.js";
 // ── Estado ─────────────────────────────────────────────────────────────────────
 
 export const appConfig = $state({
-  baseFolder: '',
-  defaultBaseFolder: '',
-  loaded: false,
+   baseFolder: "",
+   defaultBaseFolder: "",
+   loaded: false,
 
-  async init() {
-    const cfg = await bridge.get_config()
-    this.baseFolder = cfg.default_base_folder
-    this.defaultBaseFolder = cfg.default_base_folder
-    this.loaded = true
-  },
+   async init() {
+      const cfg = await bridge.get_config();
+      this.baseFolder = cfg.default_base_folder;
+      this.defaultBaseFolder = cfg.default_base_folder;
+      this.transcribeInitialPrompt = cfg.transcribe_initial_prompt ?? "";
+      this.loaded = true;
+   },
 
-  setBaseFolder(path) {
-    this.baseFolder = path
-  },
+   setBaseFolder(path) {
+      this.baseFolder = path;
+   },
 
-  resetBaseFolder() {
-    this.baseFolder = this.defaultBaseFolder
-  },
-})
+   resetBaseFolder() {
+      this.baseFolder = this.defaultBaseFolder;
+   },
+});

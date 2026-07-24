@@ -33,11 +33,17 @@ class AudioToVideoConfig:
 
 @dataclass
 class TranscribeConfig:
-    input_file: Path
-    base_folder: Path
-    total_duration: float
-    model_size: str
-    device: str
-    compute_type: str
-    output_subfolder: str
-    beam_size: int = 5
+    input_file:               Path
+    base_folder:              Path
+    total_duration:           float
+    model_size:               str
+    device:                   str
+    compute_type:             str
+    output_subfolder:         str
+    beam_size:                int   = 5
+    language:                 str   = "ja"
+    vad_filter:               bool  = True
+    condition_on_previous_text: bool = False
+    word_timestamps:          bool  = True
+    initial_prompt:           str   = ""
+    output_format:            str   = "srt"

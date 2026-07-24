@@ -78,6 +78,7 @@ class AudioToolsAPI:
         """Devuelve la configuración base al frontend."""
         return {
             "default_base_folder": str(config.DEFAULT_BASE_FOLDER),
+            "transcribe_initial_prompt": config.TRANSCRIBE_INITIAL_PROMPT,
         }
 
     def get_duration(self, file_path: str) -> float:
@@ -301,7 +302,8 @@ class AudioToolsAPI:
             current = progress_state['current']
             total = len(args_list)
             global_value = (current + value) / total
-            print(f"[DEBUG] on_progress: value={value:.3f} current={current} global={global_value:.3f}", flush=True)
+            print(
+                f"[DEBUG] on_progress: value={value:.3f} current={current} global={global_value:.3f}", flush=True)
             _emit(self._window, "audiotools:progress", {
                 "value":         global_value,
                 "file_index":    current,
@@ -331,16 +333,17 @@ class AudioToolsAPI:
 
         def on_done(success: bool):
             elapsed = time.time() - start_time
-            print(f"[DEBUG A2V] done success={success} elapsed={elapsed:.1f}s", flush=True)
+            print(
+                f"[DEBUG A2V] done success={success} elapsed={elapsed:.1f}s", flush=True)
             _emit(self._window, "audiotools:done", {"success": success})
 
-        
         import time
-        print(f"[DEBUG A2V] encoder={encoder} fps={fps} crf={crf} preset={preset} resolution={resolution} copy_audio={copy_audio}", flush=True)
+        print(
+            f"[DEBUG A2V] encoder={encoder} fps={fps} crf={crf} preset={preset} resolution={resolution} copy_audio={copy_audio}", flush=True)
         print(f"[DEBUG A2V] background_image={background_image}", flush=True)
         print(f"[DEBUG A2V] args_list[0]={args_list[0]}", flush=True)
         start_time = time.time()
-        
+
         self._ffmpeg.run_sequential(
             args_list=args_list,
             on_log=on_log,
@@ -355,26 +358,23 @@ class AudioToolsAPI:
 
     def run_transcribe(
         self,
-        file_paths: list[str],
-        base_folder: str,
-        model_size: str,
-        device: str,
-        compute_type: str,
-        output_subfolder: str,
-        beam_size: int = 5,
+        file_paths:               list[str],
+        base_folder:              str,
+        model_size:               str,
+        device:                   str,
+        compute_type:             str,
+        output_subfolder:         str,
+        beam_size:                int = 5,
+        language:                 str = "ja",
+        vad_filter:               bool = True,
+        condition_on_previous_text: bool = False,
+        word_timestamps:          bool = True,
+        initial_prompt:           str = "",
+        output_format:            str = "srt",
     ) -> None:
-        """
-        Transcribe archivos de audio usando faster-whisper.
+        from core.transcription.transcribe_action import TranscribeAction
+        from core.models import TranscribeConfig
 
-        Parámetros JS:
-            file_paths       lista de rutas de audio
-            base_folder      carpeta base del proyecto
-            model_size       "tiny" | "base" | "small" | "medium" | "large-v3"
-            device           "cpu" | "cuda"
-            compute_type     "int8" | "float16" | "float32"
-            output_subfolder subcarpeta donde se guardan los .srt
-            beam_size        beam size para el decoder (default 5)
-        """
         action = TranscribeAction()
         configs = [
             TranscribeConfig(
@@ -386,21 +386,58 @@ class AudioToolsAPI:
                 compute_type=compute_type,
                 output_subfolder=output_subfolder,
                 beam_size=beam_size,
+                language=language,
+                vad_filter=vad_filter,
+                condition_on_previous_text=condition_on_previous_text,
+                word_timestamps=word_timestamps,
+                initial_prompt=initial_prompt,
+                output_format=output_format,
             )
             for p in file_paths
         ]
+
+        progress_state = {'current': 0}
 
         def on_log(msg: str):
             _emit(self._window, "audiotools:log", {"message": msg})
 
         def on_progress(value: float):
-            _emit(self._window, "audiotools:progress", {"value": value})
+            current = progress_state['current']
+            total = len(configs)
+            global_value = (current + value) / total
+            _emit(self._window, "audiotools:progress", {
+                "value":         global_value,
+                "file_index":    current,
+                "file_progress": value,
+                "completed":     current,
+                "total":         total,
+            })
 
         def on_file_start(i: int):
-            _emit(self._window, "audiotools:file", {"index": i, "done": False})
+            progress_state['current'] = i
+            _emit(self._window, "audiotools:progress", {
+                "value":         i / len(configs),
+                "file_index":    i,
+                "file_progress": 0,
+                "completed":     i,
+                "total":         len(configs),
+            })
 
         def on_file_done(i: int, segments: list):
-            _emit(self._window, "audiotools:file", {"index": i, "done": True})
+            out_path = action.get_output_path(
+                configs[i].input_file,
+                configs[i].base_folder,
+                configs[i].output_subfolder,
+                configs[i].output_format,
+            )
+            action.write_output(segments, out_path, configs[i].output_format)
+            _emit(self._window, "audiotools:progress", {
+                "value":         (i + 1) / len(configs),
+                "file_index":    i,
+                "file_progress": 1,
+                "completed":     i + 1,
+                "total":         len(configs),
+            })
 
         def on_done(success: bool, all_segments: list):
             _emit(self._window, "audiotools:done", {"success": success})
@@ -408,10 +445,10 @@ class AudioToolsAPI:
         self._whisper.run_sequential(
             configs=configs,
             on_log=on_log,
+            on_done=on_done,
             on_progress=on_progress,
             on_file_start=on_file_start,
             on_file_done=on_file_done,
-            on_done=on_done,
         )
 
     # ── Diálogos nativos ───────────────────────────────────────────────────────
@@ -568,6 +605,7 @@ class AudioToolsAPI:
                 available[key] = False
 
         return available
+
     def scan_images_folder(self, base_folder: str) -> dict | None:
         """
         Busca la imagen más pequeña en base_folder/images/.
