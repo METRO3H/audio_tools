@@ -32,6 +32,8 @@ export const progress = $state({
    fileProgress: 0,
    completed: 0,
    total: 0,
+   startTime: null,
+   elapsed: 0,
 
    reset() {
       this.value = 0;
@@ -43,6 +45,8 @@ export const progress = $state({
       this.fileProgress = 0;
       this.completed = 0;
       this.total = 0;
+      this.startTime = null;
+      this.elapsed = 0;
    },
 });
 
@@ -50,7 +54,8 @@ export const progress = $state({
 
 if (typeof window !== "undefined") {
    window.addEventListener("audiotools:progress", (/** @type {CustomEvent} */ e) => {
-      if (!progress.running) return
+      if (!progress.running) return;
+      if (!progress.startTime) progress.startTime = Date.now();
       progress.value = e.detail.value;
       progress.fileIndex = e.detail.file_index ?? progress.fileIndex;
       progress.fileProgress = e.detail.file_progress ?? progress.fileProgress;
@@ -63,7 +68,7 @@ if (typeof window !== "undefined") {
    });
 
    window.addEventListener("audiotools:file", (/** @type {CustomEvent} */ e) => {
-      if (!progress.running) return 
+      if (!progress.running) return;
       const { index, done } = e.detail;
       const updated = [...progress.files];
       updated[index] = { index, done };
@@ -73,6 +78,9 @@ if (typeof window !== "undefined") {
    window.addEventListener("audiotools:done", (e) => {
       progress.running = false;
       progress.success = e.detail.success;
-      progress.value = e.detail.success ? 1 : progress.value; // no forzar 100% si falló
+      progress.value = e.detail.success ? 1 : progress.value;
+      if (progress.startTime) {
+         progress.elapsed = Math.round((Date.now() - progress.startTime) / 1000);
+      }
    });
 }
