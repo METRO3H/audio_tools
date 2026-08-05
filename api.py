@@ -15,7 +15,7 @@ Convención de eventos JS:
 """
 
 import json
-import threading
+import sys
 from pathlib import Path
 
 import webview
@@ -37,8 +37,12 @@ from core.models import (
 
 from util.image_optimizer import optimize_image, SUPPORTED_EXTS
 
+# ── Constantes compartidas ────────────────────────────────────────────────────
+_AUDIO_EXTS = {'.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus'}
+_VIDEO_EXTS = {'.mp4', '.mkv', '.avi', '.mov', '.webm'}
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 def _emit(window: webview.Window, event: str, detail: dict) -> None:
     """Emite un CustomEvent al frontend desde cualquier hilo."""
@@ -55,7 +59,51 @@ def _paths(raw: list[str]) -> list[Path]:
     return [Path(p) for p in raw]
 
 
+def _make_sequential_callbacks(window: webview.Window, total: int):
+    """
+    Genera los callbacks estándar para run_sequential.
+    Retorna (on_log, on_progress, on_file_start, on_file_done, on_done_wrapper)
+    donde on_done_wrapper llama a on_done(success) con el resultado.
+    """
+    progress_state = {'current': 0}
+
+    def on_log(msg: str):
+        _emit(window, "audiotools:log", {"message": msg})
+
+    def on_progress(value: float):
+        current = progress_state['current']
+        global_value = (current + value) / total
+        _emit(window, "audiotools:progress", {
+            "value":         global_value,
+            "file_index":    current,
+            "file_progress": value,
+            "completed":     current,
+            "total":         total,
+        })
+
+    def on_file_start(i: int):
+        progress_state['current'] = i
+        _emit(window, "audiotools:progress", {
+            "value":         i / total,
+            "file_index":    i,
+            "file_progress": 0,
+            "completed":     i,
+            "total":         total,
+        })
+
+    def on_file_done(i: int):
+        _emit(window, "audiotools:progress", {
+            "value":         (i + 1) / total,
+            "file_index":    i,
+            "file_progress": 1,
+            "completed":     i + 1,
+            "total":         total,
+        })
+
+    return on_log, on_progress, on_file_start, on_file_done
+
 # ── API ────────────────────────────────────────────────────────────────────────
+
 
 class AudioToolsAPI:
     """
@@ -91,7 +139,6 @@ class AudioToolsAPI:
         self._whisper.cancel()
 
         # Fallback: si el proceso sigue vivo tras terminate(), lo mata
-        import sys
         if sys.platform == "win32":
             proc = getattr(self._ffmpeg, '_process', None)
             if proc and proc.poll() is None:
@@ -202,7 +249,6 @@ class AudioToolsAPI:
             output_format    extensión de salida
             chapters         lista de chapters (o null para intervalo fijo)
         """
-        from core.models import DivergeAudioConfig
 
         input_file = Path(file_path)
         duration = get_duration(config.FFPROBE_BIN, input_file)
@@ -220,29 +266,9 @@ class AudioToolsAPI:
             for ch in (chapters or [None] * len(args_list))
         ]
 
-        def on_log(msg: str):
-            _emit(self._window, "audiotools:log", {"message": msg})
-
-        def on_progress(value: float):
-            _emit(self._window, "audiotools:progress", {"value": value})
-
-        def on_file_start(i: int):
-            _emit(self._window, "audiotools:progress", {
-                "value": i / len(args_list),
-                "file_index": i,
-                "file_progress": 0,
-                "completed": i,
-                "total": len(args_list),
-            })
-
-        def on_file_done(i: int):
-            _emit(self._window, "audiotools:progress", {
-                "value": (i + 1) / len(args_list),
-                "file_index": i,
-                "file_progress": 1,
-                "completed": i + 1,
-                "total": len(args_list),
-            })
+        on_log, on_progress, on_file_start, on_file_done = _make_sequential_callbacks(
+            self._window, len(args_list)
+        )
 
         def on_done(success: bool):
             _emit(self._window, "audiotools:done", {"success": success})
@@ -293,56 +319,12 @@ class AudioToolsAPI:
             for f in config_.input_files
         ]
 
-        def on_log(msg: str):
-            _emit(self._window, "audiotools:log", {"message": msg})
-
-        progress_state = {'current': 0}
-
-        def on_progress(value: float):
-            current = progress_state['current']
-            total = len(args_list)
-            global_value = (current + value) / total
-            print(
-                f"[DEBUG] on_progress: value={value:.3f} current={current} global={global_value:.3f}", flush=True)
-            _emit(self._window, "audiotools:progress", {
-                "value":         global_value,
-                "file_index":    current,
-                "file_progress": value,
-                "completed":     current,
-                "total":         total,
-            })
-
-        def on_file_start(i: int):
-            progress_state['current'] = i
-            _emit(self._window, "audiotools:progress", {
-                "value":         i / len(args_list),
-                "file_index":    i,
-                "file_progress": 0,
-                "completed":     i,
-                "total":         len(args_list),
-            })
-
-        def on_file_done(i: int):
-            _emit(self._window, "audiotools:progress", {
-                "value":         (i + 1) / len(args_list),
-                "file_index":    i,
-                "file_progress": 1,
-                "completed":     i + 1,
-                "total":         len(args_list),
-            })
+        on_log, on_progress, on_file_start, on_file_done = _make_sequential_callbacks(
+            self._window, len(args_list)
+        )
 
         def on_done(success: bool):
-            elapsed = time.time() - start_time
-            print(
-                f"[DEBUG A2V] done success={success} elapsed={elapsed:.1f}s", flush=True)
             _emit(self._window, "audiotools:done", {"success": success})
-
-        import time
-        print(
-            f"[DEBUG A2V] encoder={encoder} fps={fps} crf={crf} preset={preset} resolution={resolution} copy_audio={copy_audio}", flush=True)
-        print(f"[DEBUG A2V] background_image={background_image}", flush=True)
-        print(f"[DEBUG A2V] args_list[0]={args_list[0]}", flush=True)
-        start_time = time.time()
 
         self._ffmpeg.run_sequential(
             args_list=args_list,
@@ -396,32 +378,9 @@ class AudioToolsAPI:
             for p in file_paths
         ]
 
-        progress_state = {'current': 0}
-
-        def on_log(msg: str):
-            _emit(self._window, "audiotools:log", {"message": msg})
-
-        def on_progress(value: float):
-            current = progress_state['current']
-            total = len(configs)
-            global_value = (current + value) / total
-            _emit(self._window, "audiotools:progress", {
-                "value":         global_value,
-                "file_index":    current,
-                "file_progress": value,
-                "completed":     current,
-                "total":         total,
-            })
-
-        def on_file_start(i: int):
-            progress_state['current'] = i
-            _emit(self._window, "audiotools:progress", {
-                "value":         i / len(configs),
-                "file_index":    i,
-                "file_progress": 0,
-                "completed":     i,
-                "total":         len(configs),
-            })
+        on_log, on_progress, on_file_start, _ = _make_sequential_callbacks(
+            self._window, len(configs)
+        )
 
         def on_file_done(i: int, segments: list):
             out_path = action.get_output_path(
@@ -500,10 +459,8 @@ class AudioToolsAPI:
         Escanea ./audios o ./videos según media_type ('audio' | 'video').
         Retorna { files: [...], error: str | None }
         """
-        AUDIO_EXTS = {'.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus'}
-        VIDEO_EXTS = {'.mp4', '.mkv', '.avi', '.mov', '.webm'}
 
-        exts = AUDIO_EXTS if media_type == 'audio' else VIDEO_EXTS
+        exts = _AUDIO_EXTS if media_type == 'audio' else _VIDEO_EXTS
         subfolder = 'audios' if media_type == 'audio' else 'videos'
         target = Path(folder_path) / subfolder
 
@@ -556,7 +513,6 @@ class AudioToolsAPI:
 
         Retorna { name, size_mb, duration_seconds, path } o None.
         """
-        AUDIO_EXTS = {'.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus'}
         base = Path(base_folder)
         audios_dir = base / 'audios'
 
@@ -564,7 +520,7 @@ class AudioToolsAPI:
             return None
 
         files = [f for f in audios_dir.iterdir()
-                 if f.is_file() and f.suffix.lower() in AUDIO_EXTS]
+                 if f.is_file() and f.suffix.lower() in _AUDIO_EXTS]
         if not files:
             return None
 
@@ -642,7 +598,6 @@ class AudioToolsAPI:
         Si no existe o está vacía, busca en ./audios.
         Retorna { files: [...], source: str, error: str | None }
         """
-        AUDIO_EXTS = {'.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus'}
         base = Path(base_folder)
 
         for subfolder in ['audios/parts', 'audios']:
@@ -651,7 +606,7 @@ class AudioToolsAPI:
                 continue
             files = sorted(
                 [f for f in target.iterdir()
-                 if f.is_file() and f.suffix.lower() in AUDIO_EXTS],
+                 if f.is_file() and f.suffix.lower() in _AUDIO_EXTS],
                 key=lambda f: f.name,
             )
             if files:

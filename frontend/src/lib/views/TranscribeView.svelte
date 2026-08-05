@@ -6,7 +6,7 @@
    import ProcessingView from "$lib/views/shared/ProcessingView.svelte";
    import ViewHeader from "$lib/views/shared/ViewHeader.svelte";
    import HoverCard from "$lib/components/HoverCard.svelte";
-
+   import { basename, folderName } from "$lib/utils.js";
    let { goHome } = $props();
 
    // ── Constantes ───────────────────────────────────────────────────────────────
@@ -85,12 +85,6 @@
    );
 
    const canRun = $derived(fileInfos.length >= 1 && !!appConfig.baseFolder && !progress.running);
-
-   // ── Helpers ──────────────────────────────────────────────────────────────────
-
-   function folderName(path) {
-      return path?.split(/[\\/]/).pop() ?? "";
-   }
 
    // ── Carga ────────────────────────────────────────────────────────────────────
 

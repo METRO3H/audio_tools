@@ -5,7 +5,7 @@
    import Spinner from "$lib/components/Spinner.svelte";
    import ProcessingView from "$lib/views/shared/ProcessingView.svelte";
    import ViewHeader from "$lib/views/shared/ViewHeader.svelte";
-
+   import { basename, folderName } from "$lib/utils.js";
    let { goHome } = $props();
 
    // ── Estado ───────────────────────────────────────────────────────────────────
@@ -55,16 +55,6 @@
    const outputPath = $derived(appConfig.baseFolder ? `${appConfig.baseFolder}\\videos` : "");
 
    const canRun = $derived(fileInfos.length >= 1 && !!appConfig.baseFolder && !progress.running);
-
-   // ── Helpers ──────────────────────────────────────────────────────────────────
-
-   function basename(path) {
-      return path?.split(/[\\/]/).pop() ?? "";
-   }
-
-   function folderName(path) {
-      return path?.split(/[\\/]/).pop() ?? "";
-   }
 
    const encoderLabels = {
       cpu: "CPU (libx264)",

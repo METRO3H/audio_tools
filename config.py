@@ -15,6 +15,5 @@ FFPROBE_BIN = ROOT_DIR / "ffmpeg" / "ffprobe.exe"
 # Parte en el home del usuario; él la cambia desde la UI y se persiste aquí.
 DEFAULT_BASE_FOLDER = Path("E:\\Downloads\\le\\japanese_audios")
 
-COLOR_THEME = "blue"   # tema de CustomTkinter
 
 TRANSCRIBE_INITIAL_PROMPT: str = ""

@@ -6,6 +6,7 @@
    import Spinner from "$lib/components/Spinner.svelte";
    import { bridge } from "$lib/stores/bridge.svelte.js";
    import { progress } from "$lib/stores/progress.svelte.js";
+   import { formatElapsed } from "$lib/utils.js"; 
 
    let { title, goHome, fileInfos = [], outputPath = null, onCancel, onBack, showOpenFile = true } = $props();
 

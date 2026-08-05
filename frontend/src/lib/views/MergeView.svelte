@@ -2,7 +2,7 @@
    import { bridge } from "$lib/stores/bridge.svelte.js";
    import { progress } from "$lib/stores/progress.svelte.js";
    import { appConfig } from "$lib/stores/config.svelte.js";
-
+   import { basename, folderName } from '$lib/utils.js'
    import ProcessingView from "$lib/views/shared/ProcessingView.svelte";
    import ViewHeader from "$lib/views/shared/ViewHeader.svelte";
 
@@ -33,16 +33,6 @@
       fileInfos = [];
       autoHint = "";
    });
-
-   // ── Helpers ──────────────────────────────────────────────────────────────────
-
-   function basename(path) {
-      return path?.split(/[\\/]/).pop() ?? "";
-   }
-
-   function folderName(path) {
-      return path?.split(/[\\/]/).pop() ?? "";
-   }
 
    // ── Carga de archivos ────────────────────────────────────────────────────────
 
