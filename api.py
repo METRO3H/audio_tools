@@ -34,6 +34,9 @@ from core.models import (
     AudioToVideoConfig,
     TranscribeConfig,
 )
+from pathlib import Path
+from core.translation.runner import TranslateRunner
+from core.translation import prompts as translation_prompts
 
 from util.image_optimizer import optimize_image, SUPPORTED_EXTS
 
@@ -115,6 +118,7 @@ class AudioToolsAPI:
         self._window: webview.Window | None = None
         self._ffmpeg = FFmpegRunner(config.FFMPEG_BIN)
         self._whisper = WhisperRunner()
+        self._translate_runner = TranslateRunner()
 
     def set_window(self, window: webview.Window) -> None:
         """Llamado desde main.py una vez que la ventana está lista."""
@@ -137,6 +141,7 @@ class AudioToolsAPI:
         """Cancela la operación en curso. Usa kill() como fallback en Windows."""
         self._ffmpeg.cancel()
         self._whisper.cancel()
+        self._translate_runner.cancel()
 
         # Fallback: si el proceso sigue vivo tras terminate(), lo mata
         if sys.platform == "win32":
@@ -235,19 +240,25 @@ class AudioToolsAPI:
         self,
         file_path: str,
         base_folder: str,
+        output_folder: str,
         interval_seconds: int,
         output_format: str,
         chapters: list[dict] | None = None,
+        media_type: str = "audio",
+        use_subfolder: bool = True,
     ) -> None:
         """
         Divide un archivo en segmentos.
 
         Parámetros JS:
             file_path        ruta absoluta del archivo fuente
-            base_folder      carpeta base del proyecto
+            base_folder      carpeta base del proyecto (naming en modo audio)
+            output_folder    carpeta donde se escriben los segmentos
             interval_seconds duración de cada segmento en segundos (usado si chapters es None)
             output_format    extensión de salida
             chapters         lista de chapters (o null para intervalo fijo)
+            media_type       "audio" | "video"
+            use_subfolder    si True, escribe en {output_folder}/audios|videos/parts
         """
 
         input_file = Path(file_path)
@@ -256,8 +267,11 @@ class AudioToolsAPI:
         config_ = DivergeAudioConfig(
             input_file=input_file,
             base_folder=Path(base_folder),
+            output_folder=Path(output_folder),
             interval_seconds=interval_seconds,
             output_format=output_format,
+            media_type=media_type,
+            use_subfolder=use_subfolder,
         )
         action = DivergeAudioAction()
         args_list = action.build_args_list(config_, duration, chapters or None)
@@ -282,7 +296,6 @@ class AudioToolsAPI:
             on_file_done=on_file_done,
             durations=durations,
         )
-
     # ── Audio to Video ─────────────────────────────────────────────────────────
 
     def run_audio_to_video(
@@ -356,7 +369,7 @@ class AudioToolsAPI:
     ) -> None:
         from core.transcription.transcribe_action import TranscribeAction
         from core.models import TranscribeConfig
-
+        self._translate_runner.unload()
         action = TranscribeAction()
         configs = [
             TranscribeConfig(
@@ -621,3 +634,135 @@ class AudioToolsAPI:
             'source': '',
             'error':  'No se encontraron audios en ./audios/parts ni ./audios',
         }
+
+    def scan_translate_input(self, base_folder: str) -> dict:
+        """
+        Busca .srt en ./transcriptions/japanese primero, luego ./transcriptions/chinese.
+        Retorna { files: [...], source: str, error: str | None }
+        """
+        base = Path(base_folder)
+        for lang in ('japanese', 'chinese'):
+            target = base / 'transcriptions' / lang
+            if not target.is_dir():
+                continue
+            files = sorted(
+                [f for f in target.iterdir() if f.is_file()
+                 and f.suffix.lower() == '.srt'],
+                key=lambda f: f.name,
+            )
+            if files:
+                return {'files': [str(f) for f in files], 'source': lang, 'error': None}
+
+        return {
+            'files': [],
+            'source': '',
+            'error': 'No se encontraron .srt en ./transcriptions/japanese ni ./transcriptions/chinese',
+        }
+
+    def run_translate(
+        self,
+        file_paths: list[str],
+        base_folder: str,
+        output_subfolder: str = "english",
+        raw_title: str = "",
+        raw_publisher_info: str = "",
+        base_prompt: str = "",
+        model: str = "",
+        n_gpu_layers: int | None = None,
+        n_ctx: int | None = None,
+        temperature: float | None = None,
+    ) -> None:
+        """
+        Traduce una cola de .srt (todos deben pertenecer a la misma obra,
+        ya que titulo/work_info se generan una sola vez para toda la corrida).
+        Salida en {base_folder}/transcriptions/{output_subfolder}.
+        """
+        self._whisper.unload()  # coordinación de VRAM
+
+        out_dir = Path(base_folder) / "transcriptions" / output_subfolder
+        files = [(Path(p), out_dir / Path(p).name) for p in file_paths]
+
+        def on_log(msg):
+            _emit(self._window, "audiotools:log", {"message": msg})
+
+        def on_phase(msg):
+            _emit(self._window, "audiotools:translate:phase", {"phase": msg})
+
+        def on_step(step, status):
+            _emit(self._window, "audiotools:translate:step", {"step": step, "status": status})
+
+        def on_title(title):
+            _emit(self._window, "audiotools:translate:title", {"title": title})
+
+        def on_work_info(info):
+            _emit(self._window, "audiotools:translate:work_info", {"work_info": info})
+
+        def on_work_info_stream(text):
+            _emit(self._window, "audiotools:translate:work_info_stream", {"text": text})
+
+        def on_title_stream(text):
+            _emit(self._window, "audiotools:translate:title_stream", {"text": text})
+
+        def on_lines_progress(file_index, lines_done_file, lines_total_file, lines_done_global, lines_total_global):
+            _emit(self._window, "audiotools:translate:lines", {
+                "file_index": file_index,
+                "lines_done_file": lines_done_file,
+                "lines_total_file": lines_total_file,
+                "lines_done_global": lines_done_global,
+                "lines_total_global": lines_total_global,
+            })
+
+        def on_file_start(idx, total, name):
+            _emit(self._window, "audiotools:file", {"index": idx, "done": False})
+
+        def on_file_done(idx, success):
+            _emit(self._window, "audiotools:file", {"index": idx, "done": True})
+
+        def on_queue_progress(done, total):
+            _emit(self._window, "audiotools:progress", {
+                "value": (done / total) if total else 0, "file_index": done,
+                "file_progress": 0, "completed": done, "total": total,
+            })
+
+        def on_queue_done(succeeded, total):
+            _emit(self._window, "audiotools:done", {"success": succeeded > 0})
+
+        self._translate_runner.run_queue(
+            files=files,
+            raw_title=raw_title,
+            raw_publisher_info=raw_publisher_info,
+            base_prompt=base_prompt,
+            model=model,
+            n_gpu_layers=n_gpu_layers,
+            n_ctx=n_ctx,
+            temperature=temperature,
+            on_log=on_log,
+            on_phase=on_phase,
+            on_step=on_step,
+            on_title=on_title,
+            on_work_info=on_work_info,
+            on_work_info_stream=on_work_info_stream,
+            on_title_stream=on_title_stream,
+            on_lines_progress=on_lines_progress,
+            on_file_start=on_file_start,
+            on_file_done=on_file_done,
+            on_queue_progress=on_queue_progress,
+            on_queue_done=on_queue_done,
+        )
+    def cancel_translate(self) -> None:
+        self._translate_runner.cancel()
+
+    def list_translation_models(self) -> list[str]:
+        return self._translate_runner.list_models()
+
+    def list_prompt_presets(self) -> list[str]:
+        return translation_prompts.list_presets()
+
+    def get_prompt_preset(self, name: str) -> str:
+        return translation_prompts.get_preset(name)
+
+    def save_prompt_preset(self, name: str, content: str) -> None:
+        translation_prompts.save_preset(name, content)
+
+    def delete_prompt_preset(self, name: str) -> None:
+        translation_prompts.delete_preset(name)

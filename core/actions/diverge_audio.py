@@ -21,12 +21,11 @@ class DivergeAudioAction:
         duration: float,
         chapters: list[dict] | None = None,
     ) -> list[list[str]]:
-        output_dir = config.base_folder / "audios" / "parts"
+        folder_name, output_dir = self._resolve_naming_and_dir(config)
         output_dir.mkdir(parents=True, exist_ok=True)
-        folder_name = config.base_folder.name
 
-        input_ext   = config.input_file.suffix.lstrip(".").lower()
-        output_ext  = config.output_format.lower()
+        input_ext = config.input_file.suffix.lstrip(".").lower()
+        output_ext = config.output_format.lower()
         same_format = input_ext == output_ext
 
         if same_format:
@@ -36,9 +35,10 @@ class DivergeAudioAction:
             audio_args = ["-vn", "-c:a", codec]
 
         if chapters:
-            segments = [(ch["start"], ch["end"], ch["title"]) for ch in chapters]
+            segments = [(ch["start"], ch["end"], ch["title"])
+                        for ch in chapters]
         else:
-            segs     = self._calculate_segments(duration, config.interval_seconds)
+            segs = self._calculate_segments(duration, config.interval_seconds)
             segments = [(start, end, None) for start, end in segs]
 
         args_list = []
@@ -65,7 +65,7 @@ class DivergeAudioAction:
         duration: float,
         chapters: list[dict] | None = None,
     ) -> list[str]:
-        folder_name = config.base_folder.name
+        folder_name, _ = self._resolve_naming_and_dir(config)
         if chapters:
             return [
                 f"[{i}] {folder_name} - {ch['title']}.{config.output_format}"
@@ -77,8 +77,19 @@ class DivergeAudioAction:
             for i, _ in enumerate(segs, 1)
         ]
 
+    def _resolve_naming_and_dir(self, config: DivergeAudioConfig) -> tuple[str, Path]:
+        folder_name = (
+            config.input_file.stem if config.media_type == "video" else config.base_folder.name
+        )
+        if config.use_subfolder:
+            subfolder = "videos" if config.media_type == "video" else "audios"
+            output_dir = config.output_folder / subfolder / "parts"
+        else:
+            output_dir = config.output_folder
+        return folder_name, output_dir
+
     def _calculate_segments(self, duration: float, interval: int) -> list[tuple[float, float]]:
-        n_full    = int(duration // interval)
+        n_full = int(duration // interval)
         remainder = duration % interval
 
         if n_full == 0:
@@ -87,7 +98,8 @@ class DivergeAudioAction:
         if remainder == 0:
             return [(i * interval, (i + 1) * interval) for i in range(n_full)]
 
-        segments = [(i * interval, (i + 1) * interval) for i in range(n_full - 1)]
+        segments = [(i * interval, (i + 1) * interval)
+                    for i in range(n_full - 1)]
 
         if remainder < interval / 2:
             split_point = (n_full - 1) * interval + (interval + remainder) / 2

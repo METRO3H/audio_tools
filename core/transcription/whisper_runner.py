@@ -1,7 +1,9 @@
 import threading
 from pathlib import Path
 from typing import Callable
+import gc
 
+from faster_whisper import WhisperModel
 
 COMPUTE_TYPES_BY_DEVICE: dict[str, list[str]] = {
     "cuda": ["float16", "int8_float16", "int8"],
@@ -19,7 +21,7 @@ LANGUAGES   = {
     "en":   "en",
 }
 
-DEFAULT_MODEL_SIZE            = "medium"
+DEFAULT_MODEL_SIZE            = "large-v1"
 DEFAULT_DEVICE                = "cuda"
 DEFAULT_COMPUTE_TYPE          = "int8_float16"
 DEFAULT_LANGUAGE              = "ja"
@@ -40,6 +42,7 @@ class WhisperRunner:
         self._model = None
         self._model_key: tuple | None = None
         self._cancelled = False
+        self._lock = threading.Lock() 
 
     # ── API pública ───────────────────────────────────────────────────
 
@@ -66,17 +69,15 @@ class WhisperRunner:
 
     # ── Internals ─────────────────────────────────────────────────────
 
-    def _get_model(self, model_size: str, device: str, compute_type: str):
+    def _get_model(self, model_size, device, compute_type):
         key = (model_size, device, compute_type)
-        if self._model is None or self._model_key != key:
-            from faster_whisper import WhisperModel
-            self._model = WhisperModel(
-                model_size,
-                device=device,
-                compute_type=compute_type,
-            )
-            self._model_key = key
-        return self._model
+        with self._lock:
+            if self._model is None or self._model_key != key:
+                self._model = WhisperModel(
+                    model_size, device=device, compute_type=compute_type,
+                )
+                self._model_key = key
+            return self._model
 
     def _transcribe_file(
         self,
@@ -155,3 +156,11 @@ class WhisperRunner:
         except Exception as e:
             on_log(f"[error] {e}")
             on_done(False, [])
+
+    def unload(self) -> None:
+        with self._lock:
+            if self._model is not None:
+                del self._model
+                self._model = None
+                self._model_key = None
+                gc.collect()

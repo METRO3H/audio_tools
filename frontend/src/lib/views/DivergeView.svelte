@@ -17,9 +17,10 @@
    let fileInfo = $state(null);
    let chapters = $state([]);
    let hasChapters = $state(false);
-   let segmentMode = $state("interval");
+   let segmentMode = $state("chapters");
    let intervalMins = $state(20);
    let outputFolder = $state("");
+   let useSubfolder = $state(true);
    let autoHint = $state("");
 
    // ── Derivados ────────────────────────────────────────────────────────────────
@@ -28,6 +29,17 @@
 
    const outputFormat = $derived(fileInfo ? fileInfo.name.split(".").pop().toLowerCase() : "mp3");
 
+   // Fuente del nombre usado para los segmentos: en audio es la carpeta base
+   // (nombre del proyecto), en video es el nombre del propio archivo (sin extensión),
+   // ya que en modo video no existe un concepto de "carpeta base".
+   const namingSource = $derived(
+      mediaType === "video"
+         ? fileInfo
+            ? fileInfo.name.replace(/\.[^.]+$/, "")
+            : ""
+         : folderName(appConfig.baseFolder),
+   );
+
    const estimatedSegments = $derived(() => {
       if (!fileInfo || segmentMode === "chapters") return [];
       const total = fileInfo.duration_seconds;
@@ -35,7 +47,7 @@
       if (!total || !interval) return [];
       const count = Math.ceil(total / interval);
       return Array.from({ length: count }, (_, i) => ({
-         name: `[${i + 1}] ${folderName(appConfig.baseFolder)}.${outputFormat}`,
+         name: `[${i + 1}] ${namingSource}.${outputFormat}`,
          size_mb: 0,
          duration_seconds: Math.min(interval, total - i * interval),
          path: "",
@@ -45,7 +57,7 @@
    const fileInfos = $derived(
       segmentMode === "chapters"
          ? chapters.map((ch, i) => ({
-              name: `[${i + 1}] ${folderName(appConfig.baseFolder)} - ${ch.title}.${outputFormat}`,
+              name: `[${i + 1}] ${namingSource} - ${ch.title}.${outputFormat}`,
               size_mb: 0,
               duration_seconds: ch.end - ch.start,
               path: "",
@@ -53,22 +65,26 @@
          : estimatedSegments(),
    );
 
-   const outputPath = $derived(
-      mediaType === "audio"
-         ? appConfig.baseFolder
-            ? `${appConfig.baseFolder}\\audios\\parts`
-            : ""
-         : outputFolder
-           ? `${outputFolder}\\audios\\parts`
-           : "",
-   );
+   const outputSubfolder = $derived(mediaType === "video" ? "videos" : "audios");
 
-   const canRun = $derived(
-      !!fileInfo &&
-         (mediaType === "video" ? !!outputFolder : !!appConfig.baseFolder) &&
-         intervalMins > 0 &&
-         !progress.running,
-   );
+   // Carpeta efectiva donde se va a guardar:
+   //  - toggle ON  → se infiere sola (carpeta base en audio, carpeta del archivo en video)
+   //  - toggle OFF → la que el usuario eligió manualmente
+   const effectiveOutputFolder = $derived.by(() => {
+      if (!useSubfolder) return outputFolder;
+      if (mediaType === "audio") return appConfig.baseFolder;
+      if (!fileInfo?.path) return "";
+      const idx = Math.max(fileInfo.path.lastIndexOf("\\"), fileInfo.path.lastIndexOf("/"));
+      return idx >= 0 ? fileInfo.path.slice(0, idx) : "";
+   });
+
+   const outputPath = $derived.by(() => {
+      if (!effectiveOutputFolder) return "";
+      if (!useSubfolder) return effectiveOutputFolder;
+      return `${effectiveOutputFolder}\\${outputSubfolder}\\parts`;
+   });
+
+   const canRun = $derived(!!fileInfo && !!effectiveOutputFolder && intervalMins > 0 && !progress.running);
 
    function formatDuration(seconds) {
       const h = Math.floor(seconds / 3600);
@@ -85,7 +101,8 @@
       fileInfo = null;
       chapters = [];
       hasChapters = false;
-      segmentMode = "interval";
+      segmentMode = "chapters";
+      outputFolder = "";
       autoHint = "";
    });
 
@@ -95,6 +112,7 @@
       const folder = await bridge.pick_folder();
       if (!folder) return;
       appConfig.setBaseFolder(folder);
+      if (!outputFolder) outputFolder = folder;
       await autoLoadAudio(folder);
    }
 
@@ -114,7 +132,7 @@
       const chs = await bridge.get_chapters_for_file(path);
       chapters = chs;
       hasChapters = chs.length > 0;
-      if (!hasChapters) segmentMode = "interval";
+      segmentMode = hasChapters ? "chapters" : "interval";
    }
 
    async function pickFile() {
@@ -129,6 +147,9 @@
 
       if (mediaType === "audio") {
          await loadChapters(paths[0]);
+      } else {
+         hasChapters = false;
+         segmentMode = "interval";
       }
    }
 
@@ -147,10 +168,13 @@
 
       await bridge.run_diverge(
          fileInfo.path,
-         mediaType === "video" ? outputFolder : appConfig.baseFolder,
+         appConfig.baseFolder,
+         effectiveOutputFolder,
          intervalSeconds,
          outputFormat,
          segmentMode === "chapters" ? chapters : null,
+         mediaType,
+         useSubfolder,
       );
    }
 
@@ -258,17 +282,6 @@
             <div class="flex flex-col gap-1.5">
                <span class="text-xs text-white/40">Modo de segmentación</span>
                <div class="flex gap-5">
-                  <label class="flex items-center gap-2 cursor-pointer">
-                     <input
-                        type="radio"
-                        name="segmentMode"
-                        value="interval"
-                        bind:group={segmentMode}
-                        class="accent-indigo-500"
-                     />
-                     <span class="text-xs text-white/70">Intervalo fijo</span>
-                  </label>
-
                   <label
                      class="flex items-center gap-2
                           {hasChapters ? 'cursor-pointer' : 'cursor-not-allowed opacity-40'}"
@@ -282,13 +295,24 @@
                         class="accent-indigo-500"
                      />
                      <span class="text-xs text-white/70">
-                        Por chapters
+                        Chapters
                         {#if fileInfo && !hasChapters}
                            <span class="text-white/25">(sin chapters)</span>
                         {:else if hasChapters}
                            <span class="text-white/25">({chapters.length})</span>
                         {/if}
                      </span>
+                  </label>
+
+                  <label class="flex items-center gap-2 cursor-pointer">
+                     <input
+                        type="radio"
+                        name="segmentMode"
+                        value="interval"
+                        bind:group={segmentMode}
+                        class="accent-indigo-500"
+                     />
+                     <span class="text-xs text-white/70">Intervalo fijo</span>
                   </label>
                </div>
             </div>
@@ -317,8 +341,33 @@
                </div>
             {/if}
 
-            <!-- Carpeta de salida (solo video) -->
-            {#if mediaType === "video"}
+            <!-- Toggle subcarpeta audios/parts o videos/parts -->
+            <div class="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2.5">
+               <div class="flex flex-col gap-0.5">
+                  <span class="text-xs text-white/70">
+                     Guardar en subcarpeta <code class="text-white/40">{outputSubfolder}/parts</code>
+                  </span>
+                  {#if outputPath}
+                     <span class="truncate text-[11px] text-white/30">{outputPath}</span>
+                  {/if}
+               </div>
+               <button
+                  type="button"
+                  role="switch"
+                  aria-checked={useSubfolder}
+                  onclick={() => (useSubfolder = !useSubfolder)}
+                  class="relative h-5 w-9 shrink-0 rounded-full border-none p-0 transition-colors
+                     {useSubfolder ? 'bg-indigo-600' : 'bg-white/15'}"
+               >
+                  <span
+                     class="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform
+                        {useSubfolder ? 'translate-x-4' : 'translate-x-0'}"
+                  ></span>
+               </button>
+            </div>
+
+            <!-- Carpeta de salida (solo si se desactiva la subcarpeta automática) -->
+            {#if !useSubfolder}
                <div class="flex flex-col gap-1.5">
                   <span class="text-xs text-white/40">Carpeta de salida</span>
                   <button

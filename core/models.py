@@ -12,9 +12,12 @@ class MergeAudioConfig:
 @dataclass
 class DivergeAudioConfig:
     input_file: Path
-    base_folder: Path
+    base_folder: Path        # carpeta base del proyecto (naming en modo audio)
+    output_folder: Path      # carpeta real donde se escriben los segmentos
     interval_seconds: int
     output_format: str
+    media_type: str = "audio"     # "audio" | "video"
+    use_subfolder: bool = True
 
 
 @dataclass
