@@ -14,6 +14,7 @@ def get_duration(ffprobe_path: Path, file: Path) -> float:
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
     return float(result.stdout.strip())
@@ -35,6 +36,7 @@ def get_chapters(ffprobe_path: Path, file: Path) -> list[dict]:
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
     try:

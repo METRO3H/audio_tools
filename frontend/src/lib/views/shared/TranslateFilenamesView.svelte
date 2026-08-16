@@ -1,0 +1,659 @@
+<script>
+   import { bridge } from "$lib/stores/bridge.svelte.js";
+   import { progress } from "$lib/stores/progress.svelte.js";
+   import ViewHeader from "$lib/views/shared/ViewHeader.svelte";
+   import LogsModal from "$lib/components/LogsModal.svelte";
+   import Spinner from "$lib/components/Spinner.svelte";
+
+   let { goHome } = $props();
+
+   // ── Estado ───────────────────────────────────────────────────────────────────
+
+   // Reemplaza el viejo esquema de modales (translating / showPreviewModal /
+   // showResultModal) por una maquina de 4 pantallas completas, calcando el
+   // mismo patron que ya usa el traductor de .srt (TranslateSrtView que
+   // alterna con TranslateProcessingView): "config" | "processing" |
+   // "selection" | "summary".
+   let stage = $state("config");
+
+   let folder = $state("");
+   let scannedFiles = $state([]); // resultado de scan(): [{path, relative_path, name, is_dir, detected_lang, needs_translation}]
+
+   let publisherInfo = $state("");
+   let showInfoModal = $state(false);
+
+   let presets = $state([]);
+   let activePreset = $state("");
+   let basePrompt = $state("");
+   let promptDirty = $state(false);
+   let showPromptModal = $state(false);
+
+   let models = $state([]);
+   let selectedModel = $state("");
+   let nGpuLayers = $state(20);
+   let nCtx = $state(4096);
+   let temperature = $state(0.3);
+
+   let scanning = $state(false);
+   let phaseText = $state("");
+   let workInfoText = $state("");
+   let translateStreamText = $state(""); // stream crudo del modelo: "0: nombre\n1: nombre..."
+   let showLogs = $state(false);
+
+   let previewFiles = $state([]); // scannedFiles + translated_name + checked
+   let applyResult = $state(null); // {renamed: [{old, new}], errors: [{path, error}]} | null
+
+   let showModelLogModal = $state(false);
+   let copyFeedback = $state(""); // texto temporal ("Copiado") sobre el botón que se tocó
+
+   // Auto-scroll del bloque de streaming: sigue pegado al fondo mientras el
+   // usuario no haya scrolleado para arriba a propósito. Si scrolleó para
+   // leer algo de más arriba, no lo interrumpe con cada línea nueva.
+   let streamBoxEl = $state(null);
+   let stickToBottom = $state(true);
+
+   function onStreamScroll() {
+      if (!streamBoxEl) return;
+      const { scrollTop, scrollHeight, clientHeight } = streamBoxEl;
+      stickToBottom = scrollHeight - (scrollTop + clientHeight) < 24;
+   }
+
+   $effect(() => {
+      translateStreamText; // dependencia — se re-ejecuta con cada línea nueva
+      if (stickToBottom && streamBoxEl) {
+         streamBoxEl.scrollTop = streamBoxEl.scrollHeight;
+      }
+   });
+
+   async function copyToClipboard(text, feedbackKey) {
+      try {
+         await navigator.clipboard.writeText(text);
+         copyFeedback = feedbackKey;
+         setTimeout(() => {
+            if (copyFeedback === feedbackKey) copyFeedback = "";
+         }, 1500);
+      } catch {
+         // clipboard no disponible (permisos, contexto no seguro, etc.) — no rompe el flujo
+      }
+   }
+
+   // ── Carga inicial ────────────────────────────────────────────────────────────
+
+   $effect(() => {
+      (async () => {
+         models = await bridge.list_translation_models();
+         if (models.length && !selectedModel) selectedModel = models[0];
+
+         presets = await bridge.list_prompt_presets("filenames");
+         if (presets.length && !activePreset) {
+            activePreset = presets[0];
+            basePrompt = await bridge.get_prompt_preset("filenames", activePreset);
+            promptDirty = false;
+         }
+      })();
+   });
+
+   // ── Derivados ────────────────────────────────────────────────────────────────
+
+   const needsCount = $derived(scannedFiles.filter((f) => f.needs_translation).length);
+   const canRun = $derived(needsCount > 0 && !!selectedModel && stage === "config");
+
+   // Agrupa por carpeta contenedora para mostrar la vista de selección. Una
+   // carpeta que tiene contenido (o sea que aparece como "dir" de otro
+   // grupo) se muestra como cabecera interactiva de SU propio grupo — con
+   // checkbox y traducción — en vez de como fila suelta dentro del grupo
+   // de su carpeta padre. Si no se hiciera esto, la carpeta apareceria dos
+   // veces: una vez como fila normal (con la traduccion) en el grupo del
+   // padre, y otra vez como titulo de seccion en texto plano (sin
+   // traduccion) para sus hijos — y esta ultima es la que salta a la
+   // vista, haciendo parecer que la carpeta nunca se tradujo.
+   const groupedPreview = $derived.by(() => {
+      const byRelPath = new Map(previewFiles.map((f) => [f.relative_path, f]));
+      const groups = {};
+      for (const f of previewFiles) {
+         const parts = f.relative_path.split(/[\\/]/);
+         const dir = parts.slice(0, -1).join("/") || ".";
+         if (!groups[dir]) groups[dir] = [];
+         groups[dir].push(f);
+      }
+      for (const dir of Object.keys(groups)) {
+         if (dir === ".") continue;
+         const dirEntry = byRelPath.get(dir);
+         if (!dirEntry) continue;
+         const parentKey = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : ".";
+         const parentGroup = groups[parentKey];
+         const idx = parentGroup ? parentGroup.indexOf(dirEntry) : -1;
+         if (idx !== -1) parentGroup.splice(idx, 1);
+      }
+      return Object.entries(groups)
+         .sort(([a], [b]) => a.localeCompare(b))
+         .map(([dir, entries]) => [dir, entries, dir !== "." ? (byRelPath.get(dir) ?? null) : null]);
+   });
+
+   const checkedCount = $derived(previewFiles.filter((f) => f.checked).length);
+
+   function baseName(p) {
+      const parts = p.split(/[\\/]/);
+      return parts[parts.length - 1] || p;
+   }
+
+   // ── Carpeta / escaneo ────────────────────────────────────────────────────────
+
+   async function pickFolder() {
+      const picked = await bridge.pick_folder();
+      if (!picked) return;
+      folder = picked;
+      applyResult = null;
+      scanning = true;
+      scannedFiles = await bridge.scan_filenames_folder(folder);
+      scanning = false;
+   }
+
+   // ── Presets ──────────────────────────────────────────────────────────────────
+
+   async function onSelectPreset(name) {
+      activePreset = name;
+      basePrompt = await bridge.get_prompt_preset("filenames", name);
+      promptDirty = false;
+   }
+   function onPromptEdit() {
+      promptDirty = true;
+   }
+   async function savePreset() {
+      if (!activePreset) return;
+      await bridge.save_prompt_preset("filenames", activePreset, basePrompt);
+      promptDirty = false;
+   }
+   async function saveAsPreset() {
+      const name = prompt("Nombre del nuevo preset:");
+      if (!name) return;
+      await bridge.save_prompt_preset("filenames", name, basePrompt);
+      presets = await bridge.list_prompt_presets("filenames");
+      activePreset = name;
+      promptDirty = false;
+   }
+   async function deletePreset() {
+      if (!activePreset) return;
+      if (!confirm(`¿Borrar el preset "${activePreset}"?`)) return;
+      await bridge.delete_prompt_preset("filenames", activePreset);
+      presets = await bridge.list_prompt_presets("filenames");
+      activePreset = presets[0] ?? "";
+      basePrompt = activePreset ? await bridge.get_prompt_preset("filenames", activePreset) : "";
+      promptDirty = false;
+   }
+
+   // ── Eventos de progreso propios ──────────────────────────────────────────────
+
+   function onPhase(e) {
+      phaseText = e.detail.phase;
+   }
+   function onWorkInfoStream(e) {
+      workInfoText = e.detail.text;
+   }
+   function onTranslateStream(e) {
+      translateStreamText = e.detail.text;
+   }
+   function onPreviewDone(e) {
+      if (!e.detail.success) {
+         // cancelado o error — vuelve a config, no hay nada que seleccionar
+         stage = "config";
+         return;
+      }
+      previewFiles = e.detail.files.map((f) => ({ ...f, checked: f.needs_translation }));
+      stage = "selection";
+   }
+
+   window.addEventListener("audiotools:filenames:phase", onPhase);
+   window.addEventListener("audiotools:filenames:work_info_stream", onWorkInfoStream);
+   window.addEventListener("audiotools:filenames:translate_stream", onTranslateStream);
+   window.addEventListener("audiotools:filenames:preview_done", onPreviewDone);
+
+   // ── Ejecutar traducción (preview) ───────────────────────────────────────────
+
+   async function runPreview() {
+      if (!canRun) return;
+      stage = "processing";
+      phaseText = "Iniciando...";
+      workInfoText = "";
+      translateStreamText = "";
+      stickToBottom = true;
+      progress.logs = [];
+
+      await bridge.run_translate_filenames_preview(
+         scannedFiles,
+         publisherInfo,
+         basePrompt,
+         selectedModel,
+         nGpuLayers,
+         nCtx,
+         temperature,
+      );
+   }
+
+   function cancelPreview() {
+      bridge.cancel_translate_filenames();
+   }
+
+   // ── Confirmar renombrado ─────────────────────────────────────────────────────
+
+   async function applyRenames() {
+      const renames = previewFiles
+         .filter((f) => f.checked && f.needs_translation)
+         .map((f) => [f.path, f.translated_name]);
+
+      if (!renames.length) {
+         stage = "config";
+         return;
+      }
+
+      applyResult = await bridge.apply_filename_renames(renames);
+      stage = "summary";
+   }
+
+   function discardSelection() {
+      stage = "config";
+   }
+
+   async function backToConfig() {
+      stage = "config";
+      // re-escanea para reflejar el estado real en disco
+      scanning = true;
+      scannedFiles = await bridge.scan_filenames_folder(folder);
+      scanning = false;
+   }
+</script>
+
+{#if showInfoModal}
+   <div class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" role="presentation" onclick={() => (showInfoModal = false)}></div>
+   <div class="fixed inset-0 z-50 flex items-center justify-center p-6">
+      <div class="w-full max-w-xl max-h-[85vh] overflow-y-auto rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4">
+         <div class="flex items-center justify-between">
+            <h2 class="text-sm font-semibold text-white">Info del publisher</h2>
+            <button class="text-white/30 hover:text-white transition-colors" onclick={() => (showInfoModal = false)}>✕</button>
+         </div>
+         <textarea
+            bind:value={publisherInfo}
+            rows="16"
+            placeholder="Pega la descripción / ficha del trabajo (opcional)"
+            class="w-full resize-y rounded-lg border border-white/10 bg-white/5 px-3 py-2
+               text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
+         ></textarea>
+         <div class="flex justify-end">
+            <button class="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-medium text-white hover:bg-indigo-500 transition-colors" onclick={() => (showInfoModal = false)}>
+               Listo
+            </button>
+         </div>
+      </div>
+   </div>
+{/if}
+
+{#if showPromptModal}
+   <div class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" role="presentation" onclick={() => (showPromptModal = false)}></div>
+   <div class="fixed inset-0 z-50 flex items-center justify-center p-6">
+      <div class="w-full max-w-5xl max-h-[90vh] rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4">
+         <div class="flex items-center justify-between">
+            <h2 class="text-sm font-semibold text-white">Prompt {promptDirty ? "· sin guardar" : ""}</h2>
+            <button class="text-white/30 hover:text-white transition-colors" onclick={() => (showPromptModal = false)}>✕</button>
+         </div>
+         <div class="flex items-center gap-2 shrink-0">
+            <select
+               value={activePreset}
+               onchange={(e) => onSelectPreset(e.target.value)}
+               class="flex-1 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
+            >
+               {#each presets as p (p)}<option value={p}>{p}</option>{/each}
+            </select>
+            <button class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10" onclick={savePreset} title="Guardar">💾</button>
+            <button class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10" onclick={saveAsPreset} title="Guardar como">📄</button>
+            <button class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-red-400 hover:bg-white/10" onclick={deletePreset} title="Borrar preset">🗑</button>
+         </div>
+         <textarea
+            bind:value={basePrompt}
+            oninput={onPromptEdit}
+            class="w-full flex-1 min-h-[65vh] resize-none rounded-lg border border-white/10 bg-white/5 px-3 py-2
+               text-xs text-white/80 outline-none focus:border-indigo-500/50 transition-colors font-mono"
+         ></textarea>
+      </div>
+   </div>
+{/if}
+
+{#if showLogs}
+   <LogsModal logs={progress.logs} onClose={() => (showLogs = false)} />
+{/if}
+
+{#if showModelLogModal}
+   <div class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" role="presentation" onclick={() => (showModelLogModal = false)}></div>
+   <div class="fixed inset-0 z-50 flex items-center justify-center p-6">
+      <div class="w-full max-w-2xl max-h-[85vh] rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4">
+         <div class="flex items-center justify-between shrink-0">
+            <h2 class="text-sm font-semibold text-white">Log del modelo</h2>
+            <button class="text-white/30 hover:text-white transition-colors" onclick={() => (showModelLogModal = false)}>✕</button>
+         </div>
+         <p class="text-[11px] text-white/30 shrink-0">
+            Salida cruda tal cual la generó el modelo (incluye razonamiento si el modelo lo generó, sin filtrar nada).
+         </p>
+         <pre class="flex-1 overflow-y-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 px-3 py-2 font-mono text-xs text-white/60">{translateStreamText}</pre>
+         <div class="flex justify-end gap-2 shrink-0 border-t border-white/5 pt-4">
+            <button
+               class="rounded-lg border border-white/10 px-4 py-2 text-xs text-white/60 hover:text-white transition-colors"
+               onclick={() => copyToClipboard(translateStreamText, "modal")}
+            >
+               {copyFeedback === "modal" ? "Copiado" : "Copiar"}
+            </button>
+            <button
+               class="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-medium text-white hover:bg-indigo-500 transition-colors"
+               onclick={() => (showModelLogModal = false)}
+            >
+               Cerrar
+            </button>
+         </div>
+      </div>
+   </div>
+{/if}
+
+{#if stage === "processing"}
+   <div class="flex h-full flex-col">
+      <header class="flex items-center border-b border-white/5 px-8 py-5 shrink-0">
+         <button class="text-white/30 hover:text-white transition-colors text-sm" onclick={goHome}> ← Inicio </button>
+         <span class="text-white/10 mx-3">/</span>
+         <h1 class="text-sm font-semibold flex-1">Translate — Nombres de archivo</h1>
+
+         <div class="flex items-center gap-2">
+            <Spinner size={14} duration="1.5s" />
+            <button
+               class="rounded-md border border-red-500/20 bg-red-500/10 px-2.5 py-1
+                  text-xs text-red-400 hover:bg-red-500/20 transition-colors"
+               onclick={cancelPreview}
+            >
+               Cancelar
+            </button>
+            <button
+               class="rounded-md border border-white/10 bg-white/5 px-2.5 py-1
+                  text-xs text-white/40 hover:text-white/70 transition-colors"
+               onclick={() => (showLogs = !showLogs)}
+            >
+               Logs
+            </button>
+         </div>
+      </header>
+
+      <main class="flex flex-1 min-h-0 flex-col items-center px-8 py-10">
+         <div class="flex w-full max-w-xl flex-1 min-h-0 flex-col gap-4">
+            <div class="flex items-center gap-3 rounded-lg border border-white/10 bg-white/5 px-4 py-3 shrink-0">
+               <Spinner size={14} duration="1.5s" />
+               <span class="text-sm text-white/80">{phaseText}</span>
+            </div>
+
+            {#if workInfoText}
+               <div class="flex flex-col gap-1 rounded-lg border border-white/10 bg-black/20 px-3 py-2 shrink-0">
+                  <span class="text-[11px] text-white/30">Work info</span>
+                  <p class="text-xs text-white/50 whitespace-pre-wrap max-h-32 overflow-y-auto">{workInfoText}</p>
+               </div>
+            {/if}
+
+            {#if translateStreamText}
+               <div class="flex flex-1 min-h-0 flex-col gap-1 rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+                  <div class="flex items-center justify-between shrink-0">
+                     <span class="text-[11px] text-white/30">Traduciendo — salida del modelo en vivo</span>
+                     <button
+                        class="text-[11px] text-white/30 hover:text-white transition-colors"
+                        onclick={() => copyToClipboard(translateStreamText, "stream")}
+                     >
+                        {copyFeedback === "stream" ? "Copiado" : "Copiar"}
+                     </button>
+                  </div>
+                  <p
+                     bind:this={streamBoxEl}
+                     onscroll={onStreamScroll}
+                     class="flex-1 overflow-y-auto whitespace-pre-wrap font-mono text-xs text-white/60"
+                  >{translateStreamText}</p>
+               </div>
+            {/if}
+         </div>
+      </main>
+   </div>
+{:else if stage === "selection"}
+   <div class="flex h-full flex-col">
+      <ViewHeader title="Translate — Seleccionar renombres" {goHome} />
+      <main class="flex flex-1 flex-col items-center overflow-y-auto px-8 py-10">
+         <div class="flex w-full max-w-3xl flex-1 flex-col gap-4">
+            <div class="flex items-center justify-between shrink-0">
+               <h2 class="text-sm font-semibold text-white">
+                  {checkedCount} de {previewFiles.filter((f) => f.needs_translation).length} marcados
+               </h2>
+               {#if translateStreamText}
+                  <button
+                     class="rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-white/40 hover:text-white/70 transition-colors"
+                     onclick={() => (showModelLogModal = true)}
+                  >
+                     Ver log del modelo
+                  </button>
+               {/if}
+            </div>
+
+            <div class="flex-1 overflow-y-auto" style="scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;">
+               <table class="w-full border-separate border-spacing-0 text-xs">
+                  <thead>
+                     <tr class="text-white/30">
+                        <th class="w-7 pb-1 text-left font-normal"></th>
+                        <th class="w-6 pb-1 text-left font-normal"></th>
+                        <th class="pb-1 text-left font-normal">Nombre original</th>
+                        <th class="pb-1 text-left font-normal">Nombre traducido</th>
+                     </tr>
+                  </thead>
+                  <tbody>
+                     {#each groupedPreview as [dir, entries, dirEntry] (dir)}
+                        {#if dirEntry}
+                           <tr class="{dirEntry.needs_translation ? 'hover:bg-white/5' : 'opacity-35'}">
+                              <td class="pt-3 pb-1 align-middle">
+                                 <input
+                                    type="checkbox"
+                                    bind:checked={dirEntry.checked}
+                                    disabled={!dirEntry.needs_translation}
+                                    class="accent-indigo-500"
+                                 />
+                              </td>
+                              <td class="pt-3 pb-1 align-middle text-white/30" title="Carpeta">📁</td>
+                              <td class="max-w-[280px] truncate pt-3 pb-1 align-middle font-mono text-[11px] text-white/40">{dir}</td>
+                              {#if dirEntry.needs_translation}
+                                 <td class="max-w-[280px] truncate pt-3 pb-1 align-middle text-emerald-400/80">{dirEntry.translated_name}</td>
+                              {:else}
+                                 <td class="pt-3 pb-1 align-middle text-[10px] text-white/20">(ya en inglés)</td>
+                              {/if}
+                           </tr>
+                        {:else}
+                           <tr>
+                              <td colspan="4" class="pt-3 pb-1 font-mono text-[11px] text-white/30">{dir === "." ? "/" : dir}</td>
+                           </tr>
+                        {/if}
+                        {#each entries as f (f.path)}
+                           <tr class="{f.needs_translation ? 'hover:bg-white/5' : 'opacity-35'}">
+                              <td class="py-1.5 pl-4 align-middle">
+                                 <input
+                                    type="checkbox"
+                                    bind:checked={f.checked}
+                                    disabled={!f.needs_translation}
+                                    class="accent-indigo-500"
+                                 />
+                              </td>
+                              <td class="py-1.5 align-middle text-white/30" title={f.is_dir ? "Carpeta" : "Archivo"}>
+                                 {f.is_dir ? "📁" : "📄"}
+                              </td>
+                              <td class="max-w-[280px] truncate py-1.5 align-middle text-white/50">{f.name}</td>
+                              {#if f.needs_translation}
+                                 <td class="max-w-[280px] truncate py-1.5 align-middle text-emerald-400/80">{f.translated_name}</td>
+                              {:else}
+                                 <td class="py-1.5 align-middle text-[10px] text-white/20">(ya en inglés)</td>
+                              {/if}
+                           </tr>
+                        {/each}
+                     {/each}
+                  </tbody>
+               </table>
+            </div>
+
+            <div class="flex justify-end gap-2 shrink-0 border-t border-white/5 pt-4">
+               <button class="rounded-lg border border-white/10 px-4 py-2 text-xs text-white/60 hover:text-white transition-colors" onclick={discardSelection}>
+                  Cancelar
+               </button>
+               <button
+                  class="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-medium text-white hover:bg-indigo-500 transition-colors disabled:opacity-30"
+                  onclick={applyRenames}
+                  disabled={checkedCount === 0}
+               >
+                  Renombrar {checkedCount} elemento{checkedCount === 1 ? "" : "s"}
+               </button>
+            </div>
+         </div>
+      </main>
+   </div>
+{:else if stage === "summary"}
+   <div class="flex h-full flex-col">
+      <ViewHeader title="Translate — Resultado" {goHome} />
+      <main class="flex flex-1 flex-col items-center overflow-y-auto px-8 py-10">
+         <div class="flex w-full max-w-2xl flex-1 flex-col gap-4">
+            {#if applyResult}
+               <h2 class="text-sm font-semibold text-white shrink-0">
+                  Listo — {applyResult.renamed.length} renombrado{applyResult.renamed.length === 1 ? "" : "s"}
+                  {#if applyResult.errors.length}
+                     <span class="text-red-400"> · {applyResult.errors.length} con error{applyResult.errors.length === 1 ? "" : "es"}</span>
+                  {/if}
+               </h2>
+
+               <div class="flex flex-1 flex-col gap-4 overflow-y-auto" style="scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;">
+                  {#if applyResult.renamed.length}
+                     <div class="flex flex-col gap-1">
+                        <span class="text-[11px] text-white/30">Renombrados</span>
+                        <table class="w-full border-separate border-spacing-0 text-xs">
+                           <tbody>
+                              {#each applyResult.renamed as r (r.old)}
+                                 <tr class="hover:bg-white/5">
+                                    <td class="max-w-[280px] truncate py-1 align-middle text-white/50">{baseName(r.old)}</td>
+                                    <td class="w-6 py-1 align-middle text-white/20">→</td>
+                                    <td class="max-w-[280px] truncate py-1 align-middle text-emerald-400/80">{baseName(r.new)}</td>
+                                 </tr>
+                              {/each}
+                           </tbody>
+                        </table>
+                     </div>
+                  {/if}
+
+                  {#if applyResult.errors.length}
+                     <div class="flex flex-col gap-1">
+                        <span class="text-[11px] text-red-400/70">Errores</span>
+                        <div class="flex flex-col gap-1">
+                           {#each applyResult.errors as err (err.path)}
+                              <div class="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-1.5 text-xs">
+                                 <div class="text-white/50">{baseName(err.path)}</div>
+                                 <div class="text-red-400/80 text-[11px]">{err.error}</div>
+                              </div>
+                           {/each}
+                        </div>
+                     </div>
+                  {/if}
+               </div>
+            {/if}
+
+            <div class="flex justify-end shrink-0 border-t border-white/5 pt-4">
+               <button class="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-medium text-white hover:bg-indigo-500 transition-colors" onclick={backToConfig}>
+                  Volver
+               </button>
+            </div>
+         </div>
+      </main>
+   </div>
+{:else}
+   <div class="flex h-full flex-col">
+      <ViewHeader title="Translate — Nombres de archivo" {goHome} />
+
+      <main class="flex flex-1 flex-col items-center overflow-y-auto px-8 py-10">
+         <div class="flex w-full max-w-md flex-col gap-5">
+            <!-- Carpeta -->
+            <div class="flex flex-col gap-1.5">
+               <span class="text-xs text-white/40">Carpeta (se escanea recursivamente)</span>
+               <button
+                  class="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20"
+                  onclick={pickFolder}
+               >
+                  <span>📁</span>
+                  <span class="truncate text-white/60">{folder || "Sin seleccionar"}</span>
+               </button>
+            </div>
+
+            {#if scanning}
+               <div class="flex items-center gap-2 text-xs text-white/40">
+                  <Spinner size={12} duration="1.5s" /> Escaneando...
+               </div>
+            {:else if scannedFiles.length}
+               <div class="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/60">
+                  {scannedFiles.length} elementos encontrados — {needsCount} necesitan traducción
+                  <span class="text-white/25">(detectado sin IA)</span>
+               </div>
+            {:else if folder}
+               <div class="rounded-lg border border-dashed border-white/10 p-4 text-center text-xs text-white/20">
+                  No se encontraron archivos ni carpetas
+               </div>
+            {/if}
+
+            <!-- Info publisher + Prompt en una fila -->
+            <div class="grid grid-cols-2 gap-2">
+               <button
+                  class="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20"
+                  onclick={() => (showInfoModal = true)}
+               >
+                  <span class="text-white/60 truncate">Info publisher</span>
+                  <span class="{publisherInfo.trim() ? 'text-emerald-400' : 'text-white/30'} shrink-0 ml-2">
+                     {publisherInfo.trim() ? "✓" : "opcional"}
+                  </span>
+               </button>
+               <button
+                  class="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20"
+                  onclick={() => (showPromptModal = true)}
+               >
+                  <span class="text-white/60 truncate">Prompt</span>
+                  <span class="text-white/30 shrink-0 ml-2 truncate">{activePreset || "sin preset"}{promptDirty ? " ·" : ""}</span>
+               </button>
+            </div>
+
+            <!-- Modelo -->
+            <div class="flex flex-col gap-1.5">
+               <span class="text-xs text-white/40">Modelo</span>
+               <select
+                  bind:value={selectedModel}
+                  class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
+               >
+                  {#if !models.length}<option value="">Sin modelos en /models</option>{/if}
+                  {#each models as m (m)}<option value={m}>{m}</option>{/each}
+               </select>
+            </div>
+
+            <!-- Parámetros -->
+            <div class="grid grid-cols-3 gap-3">
+               <div class="flex flex-col gap-1.5">
+                  <label class="text-[11px] text-white/40" for="gpuLayers">GPU layers</label>
+                  <input id="gpuLayers" type="number" bind:value={nGpuLayers} min="0"
+                     class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white text-center outline-none focus:border-indigo-500/50 transition-colors" />
+               </div>
+               <div class="flex flex-col gap-1.5">
+                  <label class="text-[11px] text-white/40" for="ctx">Contexto</label>
+                  <input id="ctx" type="number" bind:value={nCtx} min="512" step="512"
+                     class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white text-center outline-none focus:border-indigo-500/50 transition-colors" />
+               </div>
+               <div class="flex flex-col gap-1.5">
+                  <label class="text-[11px] text-white/40" for="temp">Temperatura</label>
+                  <input id="temp" type="number" bind:value={temperature} min="0" max="2" step="0.1"
+                     class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white text-center outline-none focus:border-indigo-500/50 transition-colors" />
+               </div>
+            </div>
+
+            <button
+               class="w-full rounded-lg bg-indigo-600 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed"
+               onclick={runPreview}
+               disabled={!canRun}
+            >
+               Traducir nombres ({needsCount})
+            </button>
+         </div>
+      </main>
+   </div>
+{/if}

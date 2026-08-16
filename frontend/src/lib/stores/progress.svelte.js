@@ -6,8 +6,8 @@
  * Escucha los CustomEvents que api.py emite via evaluate_js():
  *   audiotools:progress  { value: float 0..1 }
  *   audiotools:log       { message: string }
- *   audiotools:file      { index: int, done: bool }
- *   audiotools:done      { success: bool }
+ *   audiotools:file      { index: int, done: bool, started_at?: float, elapsed?: float }
+ *   audiotools:done      { success: bool, elapsed?: float }
  *
  * Uso:
  *   import { progress } from '$lib/stores/progress.svelte.js'
@@ -79,7 +79,13 @@ if (typeof window !== "undefined") {
       progress.running = false;
       progress.success = e.detail.success;
       progress.value = e.detail.success ? 1 : progress.value;
-      if (progress.startTime) {
+      // Si el backend manda su propio elapsed (medido con su propio reloj,
+      // mas preciso), se usa ese en vez de aproximarlo con Date.now() del
+      // navegador. Hoy solo run_translate() (.srt) lo manda; el resto de
+      // las tools sigue cayendo al calculo anterior, sin cambios.
+      if (e.detail.elapsed != null) {
+         progress.elapsed = Math.round(e.detail.elapsed);
+      } else if (progress.startTime) {
          progress.elapsed = Math.round((Date.now() - progress.startTime) / 1000);
       }
    });

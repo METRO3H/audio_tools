@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 from typing import Callable
 
 import config
 from core.translation.model_manager import ModelManager
-from core.translation.prompts import (
-    TITLE_TRANSLATION_PROMPT,
-    WORK_INFO_EXTRACTION_PROMPT,
-    build_system_prompt,
-)
+from core.translation import prompts
+from core.translation.prompts import build_system_prompt
 from core.translation.srt import parse_srt, write_srt
 
 
@@ -40,6 +38,14 @@ class TranslateRunner:
     por lineas durante la fase de bloques, tanto del archivo actual como
     acumulado de toda la cola. Las lineas totales se pre-calculan antes
     de arrancar a traducir, parseando todos los .srt de la cola.
+
+    on_file_start(idx, total, name, started_at): started_at es un
+    timestamp epoch (time.time()) tomado justo antes de arrancar ESE
+    archivo — no incluye la carga del modelo ni work_info/titulo, que
+    corren una sola vez antes del loop.
+
+    on_file_done(idx, success, elapsed): elapsed en segundos, medido
+    desde el started_at de ese mismo archivo.
     """
 
     def __init__(self) -> None:
@@ -75,8 +81,8 @@ class TranslateRunner:
         on_work_info_stream: Callable[[str], None] | None = None,
         on_title_stream: Callable[[str], None] | None = None,
         on_lines_progress: Callable[[int, int, int, int, int], None] | None = None,
-        on_file_start: Callable[[int, int, str], None] | None = None,
-        on_file_done: Callable[[int, bool], None] | None = None,
+        on_file_start: Callable[[int, int, str, float], None] | None = None,
+        on_file_done: Callable[[int, bool, float], None] | None = None,
         on_queue_progress: Callable[[int, int], None] | None = None,
         on_queue_done: Callable[[int, int], None] | None = None,
     ) -> None:
@@ -146,7 +152,7 @@ class TranslateRunner:
                 phase("Generando work info...")
                 log("Generando work info del publisher...")
                 work_info = self._manager.generate_text(
-                    WORK_INFO_EXTRACTION_PROMPT, raw_publisher_info.strip(),
+                    prompts.get_system_prompt("srt", "work_info_extraction"), raw_publisher_info.strip(),
                     temperature=temp,
                     on_stream=(lambda tokens, text: on_work_info_stream(text)) if on_work_info_stream else None,
                 )
@@ -173,7 +179,7 @@ class TranslateRunner:
                         f"[Title to translate]:\n{raw_title.strip()}"
                     )
                 title = self._manager.generate_text(
-                    TITLE_TRANSLATION_PROMPT, user_msg,
+                    prompts.get_system_prompt("srt", "title_translation"), user_msg,
                     temperature=temp,
                     on_stream=(lambda tokens, text: on_title_stream(text)) if on_title_stream else None,
                 )
@@ -202,7 +208,8 @@ class TranslateRunner:
                 name = input_srt.name
                 lines_total_file = file_line_counts[idx]
                 log(f"\n-- Archivo {idx + 1}/{total_files}: {name}")
-                if on_file_start: on_file_start(idx, total_files, name)
+                file_started_at = time.time()
+                if on_file_start: on_file_start(idx, total_files, name, file_started_at)
 
                 try:
                     entries = parse_srt(input_srt)
@@ -255,7 +262,7 @@ class TranslateRunner:
                         context = "\n".join(f"{l['id']}: {l['text']}" for l in last)
 
                     if self._cancelled:
-                        if on_file_done: on_file_done(idx, False)
+                        if on_file_done: on_file_done(idx, False, time.time() - file_started_at)
                         break
 
                     by_id = {t["id"]: t["text"] for t in all_translated}
@@ -267,11 +274,11 @@ class TranslateRunner:
                     write_srt(output_srt, entries)
                     log(f"Guardado: {output_srt}")
                     succeeded += 1
-                    if on_file_done: on_file_done(idx, True)
+                    if on_file_done: on_file_done(idx, True, time.time() - file_started_at)
 
                 except Exception as exc:
                     log(f"[error] {name}: {exc}")
-                    if on_file_done: on_file_done(idx, False)
+                    if on_file_done: on_file_done(idx, False, time.time() - file_started_at)
 
                 lines_done_global_base += lines_total_file
                 if on_queue_progress: on_queue_progress(idx + 1, total_files)

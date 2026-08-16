@@ -6,15 +6,27 @@
    * Muestra nombre, peso (si existe), duración y barra de progreso individual.
    *
    * Props:
-   *   name      string  — nombre del archivo
-   *   sizeMb    number  — peso en MB (0 o null = no mostrar)
-   *   duration  number  — duración en segundos
-   *   progress  number  — 0..1 (null = en cola, 1 = completado)
-   *   active    boolean — si está siendo procesado ahora
-   *   done      boolean — si ya terminó
+   *   name            string  — nombre del archivo
+   *   sizeMb          number  — peso en MB (0 o null = no mostrar)
+   *   duration        number  — duración del audio en segundos
+   *   progress        number  — 0..1 (null = en cola, 1 = completado)
+   *   active          boolean — si está siendo procesado ahora
+   *   done            boolean — si ya terminó
+   *   elapsedSeconds  number|null — tiempo de PROCESAMIENTO (no confundir
+   *                     con `duration`, que es la duración del audio). En
+   *                     vivo mientras `active`, congelado una vez `done`.
+   *                     null = no mostrar nada (tools que no lo mandan).
    */
 
-  let { name, sizeMb = 0, duration, progress = null, active = false, done = false } = $props()
+  let {
+    name,
+    sizeMb = 0,
+    duration,
+    progress = null,
+    active = false,
+    done = false,
+    elapsedSeconds = null,
+  } = $props()
 
   function formatDuration(seconds) {
     const h = Math.floor(seconds / 3600)
@@ -45,8 +57,14 @@
       <span>{formatDuration(duration)}</span>
       {#if done}
         <span class="text-emerald-400">✓</span>
+        {#if elapsedSeconds != null}
+          <span class="text-white/25 tabular-nums">{formatDuration(elapsedSeconds)}</span>
+        {/if}
       {:else if active && percent !== null}
         <span class="text-indigo-400">{percent}%</span>
+        {#if elapsedSeconds != null}
+          <span class="text-white/25 tabular-nums">{formatDuration(elapsedSeconds)}</span>
+        {/if}
       {/if}
     </div>
   </div>

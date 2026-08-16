@@ -2,6 +2,7 @@
    import { onDestroy } from "svelte";
    import { bridge } from "$lib/stores/bridge.svelte.js";
    import { progress } from "$lib/stores/progress.svelte.js";
+   import { formatDuration } from "$lib/utils.js";
 
    import FileInfoRow from "$lib/components/FileInfoRow.svelte";
    import ProgressBar from "$lib/components/ProgressBar.svelte";
@@ -93,6 +94,57 @@
       return null;
    }
 
+   // ── Timing ───────────────────────────────────────────────────────────────
+   // queueStartedAt / fileTimings llegan del backend (timestamps epoch, mas
+   // precisos que medir con Date.now() del navegador). nowTick solo sirve
+   // para que el conteo en vivo se re-dibuje cada 1s mientras corre — el
+   // numero final (una vez que un archivo o la cola terminan) siempre sale
+   // del backend, no de este tick.
+
+   let queueStartedAt = $state(null); // epoch segundos — incluye carga del modelo
+   let fileTimings = $state({}); // { [idx]: { startedAt: epoch|null, elapsedFinal: seg|null } }
+   let nowTick = $state(Date.now());
+
+   function onQueueStarted(e) {
+      queueStartedAt = e.detail.started_at;
+   }
+
+   function onFileTiming(e) {
+      const { index, done, started_at, elapsed } = e.detail;
+      const prev = fileTimings[index] ?? {};
+      fileTimings = {
+         ...fileTimings,
+         [index]: done ? { ...prev, elapsedFinal: elapsed } : { ...prev, startedAt: started_at },
+      };
+   }
+
+   function fileElapsed(i) {
+      const t = fileTimings[i];
+      if (!t) return null;
+      if (t.elapsedFinal != null) return t.elapsedFinal;
+      if (t.startedAt != null) return Math.max(0, nowTick / 1000 - t.startedAt);
+      return null;
+   }
+
+   const queueElapsedLive = $derived(
+      queueStartedAt != null ? Math.max(0, nowTick / 1000 - queueStartedAt) : 0,
+   );
+   // Una vez terminado, el total autoritativo es progress.elapsed (lo manda
+   // el backend en audiotools:done — ver progress.svelte.js). No uso la
+   // const `finished` de mas abajo porque en el orden del archivo todavia
+   // no esta declarada en este punto.
+   const queueElapsedDisplay = $derived(
+      !progress.running && progress.success !== null ? progress.elapsed : queueElapsedLive,
+   );
+
+   $effect(() => {
+      if (!progress.running) return;
+      const interval = setInterval(() => {
+         nowTick = Date.now();
+      }, 1000);
+      return () => clearInterval(interval);
+   });
+
    // ── Cancelación: feedback inmediato aunque el modelo tarde en soltar ───────
 
    let cancelling = $state(false);
@@ -129,6 +181,8 @@
    window.addEventListener("audiotools:translate:work_info", onWorkInfoFinal);
    window.addEventListener("audiotools:translate:title", onTitleFinal);
    window.addEventListener("audiotools:translate:lines", onLinesProgress);
+   window.addEventListener("audiotools:translate:queue_started", onQueueStarted);
+   window.addEventListener("audiotools:file", onFileTiming);
 
    onDestroy(() => {
       window.removeEventListener("audiotools:translate:step", onStepEvent);
@@ -137,6 +191,8 @@
       window.removeEventListener("audiotools:translate:work_info", onWorkInfoFinal);
       window.removeEventListener("audiotools:translate:title", onTitleFinal);
       window.removeEventListener("audiotools:translate:lines", onLinesProgress);
+      window.removeEventListener("audiotools:translate:queue_started", onQueueStarted);
+      window.removeEventListener("audiotools:file", onFileTiming);
    });
 
    const finished = $derived(!progress.running && progress.success !== null);
@@ -182,17 +238,18 @@
          {#each steps as s (s.key)}
             <button
                onclick={() => selectTab(s.key)}
-               class="flex items-center gap-2 rounded-lg border px-4 py-2 transition-all duration-300
-                  {activeTab === s.key ? 'ring-1 ring-indigo-400/40' : ''}
+               class="flex items-center gap-2 rounded-lg border px-4 py-2 transition-all duration-200
+                  {activeTab === s.key ? 'opacity-100 scale-[1.04]' : 'opacity-45 hover:opacity-75'}
                   {s.status === 'done'
                   ? 'border-emerald-500/20 bg-emerald-500/5'
                   : s.status === 'active'
                     ? 'border-indigo-500/30 bg-indigo-500/5'
                     : s.status === 'skipped'
-                      ? 'border-white/5 bg-white/3 opacity-40'
+                      ? 'border-white/5 bg-white/3'
                       : s.status === 'cancelled'
                         ? 'border-red-500/20 bg-red-500/5'
                         : 'border-white/5 bg-white/3'}"
+               style={activeTab === s.key ? "box-shadow: 0 0 0 1.5px rgba(129,140,248,0.55);" : ""}
             >
                <span class="flex w-4 items-center justify-center">
                   {#if s.status === "done"}
@@ -254,6 +311,9 @@
                      </span>
                      <span class="text-xs text-white/40 tabular-nums">
                         {linesGlobalDone}/{linesGlobalTotal} líneas
+                        {#if queueElapsedDisplay > 0}
+                           <span class="ml-2 text-white/25">· {formatDuration(queueElapsedDisplay)}</span>
+                        {/if}
                         {#if cancelling}<span class="text-red-400/70 ml-2">deteniendo...</span>{/if}
                      </span>
                   </div>
@@ -278,6 +338,7 @@
                            progress={fileProgress(i)}
                            active={isFileActive(i)}
                            done={isFileDone(i)}
+                           elapsedSeconds={fileElapsed(i)}
                         />
                      {/each}
                   </div>
