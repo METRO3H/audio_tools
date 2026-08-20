@@ -9,12 +9,6 @@ import config
 from core.translation.model_manager import ModelManager
 from core.translation import prompts
 
-_CHAPTER_TASK_INSTRUCTIONS = (
-    "Translate each numbered chapter title into English, faithfully and "
-    "without censoring explicit content. Output only the translations in "
-    "the same numbered format, one per line."
-)
-
 
 class ChaptersTranslateRunner:
     """
@@ -55,7 +49,8 @@ class ChaptersTranslateRunner:
         chapters: list[dict],
         raw_publisher_info: str,
         base_prompt: str,
-        model: str,
+        glossary: str = "",
+        model: str = "",
         n_gpu_layers: int | None = None,
         n_ctx: int | None = None,
         temperature: float | None = None,
@@ -69,7 +64,7 @@ class ChaptersTranslateRunner:
         threading.Thread(
             target=self._worker,
             args=(
-                input_file, output_file, chapters, raw_publisher_info, base_prompt,
+                input_file, output_file, chapters, raw_publisher_info, base_prompt, glossary,
                 model, n_gpu_layers, n_ctx, temperature,
                 on_log, on_phase, on_work_info, on_work_info_stream, on_done,
             ),
@@ -79,7 +74,7 @@ class ChaptersTranslateRunner:
     # ── Worker ───────────────────────────────────────────────────────────
 
     def _worker(
-        self, input_file, output_file, chapters, raw_publisher_info, base_prompt,
+        self, input_file, output_file, chapters, raw_publisher_info, base_prompt, glossary,
         model, n_gpu_layers, n_ctx, temperature,
         on_log, on_phase, on_work_info, on_work_info_stream, on_done,
     ):
@@ -106,7 +101,7 @@ class ChaptersTranslateRunner:
                 phase("Generando work info...")
                 log("Generando work info del publisher (chapters)...")
                 work_info = self._manager.generate_text(
-                    prompts.get_system_prompt("chapters", "work_info_extraction"),
+                    prompts.get_shared_prompt("work_info_extraction"),
                     raw_publisher_info.strip(),
                     temperature=temp,
                     on_stream=(lambda tokens, text: on_work_info_stream(text)) if on_work_info_stream else None,
@@ -121,10 +116,12 @@ class ChaptersTranslateRunner:
             phase(f"Traduciendo {len(chapters)} titulos de capitulo...")
             log(f"Traduciendo {len(chapters)} titulos de capitulo...")
             system_prompt = prompts.build_short_text_prompt(
-                _CHAPTER_TASK_INSTRUCTIONS, base_prompt, work_info,
+                base_prompt, glossary, work_info,
             )
             titles = [ch["title"] for ch in chapters]
-            translated_titles = self._manager.translate_texts(titles, system_prompt, temperature=temp)
+            translated_titles = self._manager.translate_texts(
+                titles, system_prompt, temperature=temp, on_retry_log=log,
+            )
 
             for ch, new_title in zip(chapters, translated_titles):
                 log(f"  [{ch['index']}] {ch['title']} -> {new_title}")
@@ -185,3 +182,4 @@ class ChaptersTranslateRunner:
                 "",
             ]
         self._METADATA_FILE.write_text("\n".join(lines), encoding="utf-8")
+

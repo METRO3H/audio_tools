@@ -10,14 +10,6 @@ from core.lang_detect import detect_language
 from core.translation.model_manager import ModelManager
 from core.translation import prompts
 
-_FILENAME_TASK_INSTRUCTIONS = (
-    "Translate each numbered file or folder name (without any file "
-    "extension) into a concise English name. Preserve any leading "
-    "numbering/ordering exactly as given. Do not use characters invalid "
-    'in Windows file names (\\ / : * ? " < > |). Output only the '
-    "translated names in the same numbered format, one per line."
-)
-
 _INVALID_WIN_CHARS = re.compile(r'[<>:"/\\|?*]')
 
 
@@ -85,7 +77,8 @@ class FilenameTranslateRunner:
         files: list[dict],
         raw_publisher_info: str,
         base_prompt: str,
-        model: str,
+        glossary: str = "",
+        model: str = "",
         n_gpu_layers: int | None = None,
         n_ctx: int | None = None,
         temperature: float | None = None,
@@ -127,7 +120,7 @@ class FilenameTranslateRunner:
             phase("Generando work info...")
             log("Generando work info del publisher (filenames)...")
             work_info = self._manager.generate_text(
-                prompts.get_system_prompt("filenames", "work_info_extraction"),
+                prompts.get_shared_prompt("work_info_extraction"),
                 raw_publisher_info.strip(),
                 temperature=temp,
                 on_stream=(lambda tokens, text: on_work_info_stream(text)) if on_work_info_stream else None,
@@ -141,7 +134,7 @@ class FilenameTranslateRunner:
         phase(f"Traduciendo {len(to_translate)} nombres...")
         log(f"Traduciendo {len(to_translate)} nombres de archivo/carpeta...")
         system_prompt = prompts.build_short_text_prompt(
-            _FILENAME_TASK_INSTRUCTIONS, base_prompt, work_info,
+            base_prompt, glossary, work_info,
         )
         # Para carpetas se traduce el nombre completo (no hay extension que
         # separar); para archivos, solo el stem.
@@ -152,6 +145,7 @@ class FilenameTranslateRunner:
         translated_names = self._manager.translate_texts(
             names_to_translate, system_prompt, temperature=temp,
             on_stream=(lambda tokens, text: on_translate_stream(text)) if on_translate_stream else None,
+            on_retry_log=log,
         )
 
         translated_by_path = {}

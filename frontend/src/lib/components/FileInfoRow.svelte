@@ -16,6 +16,9 @@
    *                     con `duration`, que es la duración del audio). En
    *                     vivo mientras `active`, congelado una vez `done`.
    *                     null = no mostrar nada (tools que no lo mandan).
+   *   onRowClick      function|null — si se pasa, la fila se vuelve
+   *                     clickeable (cursor + hover). Pensado para abrir
+   *                     un modal de detalle (ej. el stream de un archivo).
    */
 
   let {
@@ -26,6 +29,7 @@
     active = false,
     done = false,
     elapsedSeconds = null,
+    onRowClick = null,
   } = $props()
 
   function formatDuration(seconds) {
@@ -45,7 +49,14 @@
   )
 </script>
 
-<div class="flex flex-col gap-1.5 rounded-lg border px-4 py-3 transition-all duration-300 {rowColor}">
+<div
+  class="flex flex-col gap-1.5 rounded-lg border px-4 py-3 transition-all duration-300 {rowColor}
+    {onRowClick ? 'cursor-pointer hover:border-white/20' : ''}"
+  role={onRowClick ? 'button' : undefined}
+  tabindex={onRowClick ? 0 : undefined}
+  onclick={onRowClick}
+  onkeydown={onRowClick ? (e) => (e.key === 'Enter' || e.key === ' ') && onRowClick(e) : undefined}
+>
 
   <!-- Fila superior: nombre, peso (opcional), duración -->
   <div class="flex items-center justify-between gap-4">
@@ -54,7 +65,9 @@
       {#if sizeMb > 0}
         <span>{sizeMb} MB</span>
       {/if}
-      <span>{formatDuration(duration)}</span>
+      {#if duration}
+        <span>{formatDuration(duration)}</span>
+      {/if}
       {#if done}
         <span class="text-emerald-400">✓</span>
         {#if elapsedSeconds != null}
@@ -80,3 +93,4 @@
   {/if}
 
 </div>
+

@@ -8,10 +8,12 @@ Los eventos de progreso se emiten de vuelta al frontend via
 window.evaluate_js(), disparando CustomEvents que Svelte escucha.
 
 Convención de eventos JS:
-    audiotools:log       { detail: { message: str } }
-    audiotools:progress  { detail: { value: float } }
-    audiotools:file      { detail: { index: int, done: bool, started_at?: float, elapsed?: float } }
-    audiotools:done      { detail: { success: bool, elapsed?: float } }
+    audiotools:log               { detail: { message: str } }
+    audiotools:progress          { detail: { value: float } }
+    audiotools:file              { detail: { index: int, done: bool, started_at?: float, elapsed?: float } }
+    audiotools:done              { detail: { success: bool, elapsed?: float } }
+    audiotools:translate:block_stream  { detail: { file_index: int, text: str } }
+    audiotools:translate:block_input   { detail: { file_index: int, text: str } }
 
 Los campos started_at/elapsed en audiotools:file y elapsed en audiotools:done
 son opcionales — hoy solo los manda run_translate() (.srt). started_at es un
@@ -696,6 +698,7 @@ class AudioToolsAPI:
         raw_title: str = "",
         raw_publisher_info: str = "",
         base_prompt: str = "",
+        glossary: str = "",
         model: str = "",
         n_gpu_layers: int | None = None,
         n_ctx: int | None = None,
@@ -776,11 +779,20 @@ class AudioToolsAPI:
                 "elapsed": time.time() - queue_started_at,
             })
 
+        def on_block_stream(file_index, text):
+            _emit(self._window, "audiotools:translate:block_stream",
+                  {"file_index": file_index, "text": text})
+
+        def on_block_input(file_index, text):
+            _emit(self._window, "audiotools:translate:block_input",
+                  {"file_index": file_index, "text": text})
+
         self._translate_runner.run_queue(
             files=files,
             raw_title=raw_title,
             raw_publisher_info=raw_publisher_info,
             base_prompt=base_prompt,
+            glossary=glossary,
             model=model,
             n_gpu_layers=n_gpu_layers,
             n_ctx=n_ctx,
@@ -797,6 +809,8 @@ class AudioToolsAPI:
             on_file_done=on_file_done,
             on_queue_progress=on_queue_progress,
             on_queue_done=on_queue_done,
+            on_block_stream=on_block_stream,
+            on_block_input=on_block_input,
         )
 
     def cancel_translate(self) -> None:
@@ -814,7 +828,8 @@ class AudioToolsAPI:
         chapters: list[dict],
         raw_publisher_info: str,
         base_prompt: str,
-        model: str,
+        glossary: str = "",
+        model: str = "",
         n_gpu_layers: int | None = None,
         n_ctx: int | None = None,
         temperature: float | None = None,
@@ -852,6 +867,7 @@ class AudioToolsAPI:
             chapters=chapters,
             raw_publisher_info=raw_publisher_info,
             base_prompt=base_prompt,
+            glossary=glossary,
             model=model,
             n_gpu_layers=n_gpu_layers,
             n_ctx=n_ctx,
@@ -880,7 +896,8 @@ class AudioToolsAPI:
         files: list[dict],
         raw_publisher_info: str,
         base_prompt: str,
-        model: str,
+        glossary: str = "",
+        model: str = "",
         n_gpu_layers: int | None = None,
         n_ctx: int | None = None,
         temperature: float | None = None,
@@ -921,6 +938,7 @@ class AudioToolsAPI:
                     files=files,
                     raw_publisher_info=raw_publisher_info,
                     base_prompt=base_prompt,
+                    glossary=glossary,
                     model=model,
                     n_gpu_layers=n_gpu_layers,
                     n_ctx=n_ctx,
@@ -955,16 +973,21 @@ class AudioToolsAPI:
         pairs = [(r[0], r[1]) for r in renames]
         return self._filenames_runner.apply_renames(pairs)
 
-    # ── Translate: presets de prompts (independientes por kind) ────────────────
+    # ── Translate: prompts por idioma (compartidos entre los tres kinds) ───────
 
-    def list_prompt_presets(self, kind: str = "srt") -> list[str]:
-        return translation_prompts.list_presets(kind)
+    def list_prompt_languages(self) -> list[str]:
+        return translation_prompts.list_languages()
 
-    def get_prompt_preset(self, kind: str, name: str) -> str:
-        return translation_prompts.get_preset(kind, name)
+    def get_translation_prompt(self, language: str, kind: str) -> str:
+        return translation_prompts.get_translation_prompt(language, kind)
 
-    def save_prompt_preset(self, kind: str, name: str, content: str) -> None:
-        translation_prompts.save_preset(kind, name, content)
+    def save_translation_prompt(self, language: str, kind: str, content: str) -> None:
+        translation_prompts.save_translation_prompt(language, kind, content)
 
-    def delete_prompt_preset(self, kind: str, name: str) -> None:
-        translation_prompts.delete_preset(kind, name)
+    def get_glossary(self, language: str) -> str:
+        return translation_prompts.get_glossary(language)
+
+    def save_glossary(self, language: str, content: str) -> None:
+        translation_prompts.save_glossary(language, content)
+
+

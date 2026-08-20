@@ -145,6 +145,29 @@
       return () => clearInterval(interval);
    });
 
+   // ── Streaming crudo del modelo, por archivo (para debugging) ────────────
+   // fileStreamLogs[i] / fileInputLogs[i] = texto completo acumulado que
+   // mandó api.py para ese archivo — ya vienen armados desde runner.py con
+   // el historial de todos los bloques (y sus reintentos) de ESE archivo,
+   // sin pisarse entre sí. Uno es lo que el modelo devolvió (output), el
+   // otro lo que se le mandó (input) — mismo archivo, mismos bloques.
+
+   let fileStreamLogs = $state({}); // { [fileIndex]: string } — output
+   let fileInputLogs = $state({}); // { [fileIndex]: string } — input
+   let openFileStream = $state(null); // fileIndex | null — modal por archivo
+   let showAllStreamsModal = $state(false); // modal con todos los archivos
+   let streamTab = $state("output"); // "output" | "input" — compartido por los dos modales
+
+   function onBlockStream(e) {
+      const { file_index, text } = e.detail;
+      fileStreamLogs = { ...fileStreamLogs, [file_index]: text };
+   }
+
+   function onBlockInput(e) {
+      const { file_index, text } = e.detail;
+      fileInputLogs = { ...fileInputLogs, [file_index]: text };
+   }
+
    // ── Cancelación: feedback inmediato aunque el modelo tarde en soltar ───────
 
    let cancelling = $state(false);
@@ -183,6 +206,8 @@
    window.addEventListener("audiotools:translate:lines", onLinesProgress);
    window.addEventListener("audiotools:translate:queue_started", onQueueStarted);
    window.addEventListener("audiotools:file", onFileTiming);
+   window.addEventListener("audiotools:translate:block_stream", onBlockStream);
+   window.addEventListener("audiotools:translate:block_input", onBlockInput);
 
    onDestroy(() => {
       window.removeEventListener("audiotools:translate:step", onStepEvent);
@@ -193,6 +218,8 @@
       window.removeEventListener("audiotools:translate:lines", onLinesProgress);
       window.removeEventListener("audiotools:translate:queue_started", onQueueStarted);
       window.removeEventListener("audiotools:file", onFileTiming);
+      window.removeEventListener("audiotools:translate:block_stream", onBlockStream);
+      window.removeEventListener("audiotools:translate:block_input", onBlockInput);
    });
 
    const finished = $derived(!progress.running && progress.success !== null);
@@ -201,6 +228,79 @@
 
 {#if showLogs}
    <LogsModal logs={progress.logs} onClose={() => (showLogs = false)} />
+{/if}
+
+{#if openFileStream !== null}
+   <div class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" role="presentation" onclick={() => (openFileStream = null)}></div>
+   <div class="fixed inset-0 z-50 flex items-center justify-center p-6">
+      <div class="w-full max-w-3xl max-h-[85vh] rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4">
+         <div class="flex items-center justify-between shrink-0">
+            <h2 class="text-sm font-semibold text-white truncate">
+               Stream — {fileInfos[openFileStream]?.name ?? `archivo ${openFileStream + 1}`}
+            </h2>
+            <button class="text-white/30 hover:text-white transition-colors" onclick={() => (openFileStream = null)}>✕</button>
+         </div>
+         <div class="flex gap-1 shrink-0 border-b border-white/5">
+            <button
+               class="px-3 py-1.5 text-xs transition-colors {streamTab === 'input' ? 'text-white border-b-2 border-indigo-500' : 'text-white/40 hover:text-white/70'}"
+               onclick={() => (streamTab = "input")}
+            >
+               Input
+            </button>
+            <button
+               class="px-3 py-1.5 text-xs transition-colors {streamTab === 'output' ? 'text-white border-b-2 border-indigo-500' : 'text-white/40 hover:text-white/70'}"
+               onclick={() => (streamTab = "output")}
+            >
+               Output
+            </button>
+         </div>
+         <pre class="flex-1 overflow-y-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 px-3 py-2 font-mono text-xs text-white/60"
+            style="scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;"
+         >{(streamTab === "input" ? fileInputLogs[openFileStream] : fileStreamLogs[openFileStream]) ?? "Todavía no hay nada para este archivo."}</pre>
+      </div>
+   </div>
+{/if}
+
+{#if showAllStreamsModal}
+   <div class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" role="presentation" onclick={() => (showAllStreamsModal = false)}></div>
+   <div class="fixed inset-0 z-50 flex items-center justify-center p-6">
+      <div class="w-full max-w-4xl max-h-[85vh] rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4">
+         <div class="flex items-center justify-between shrink-0">
+            <h2 class="text-sm font-semibold text-white">Stream — todos los archivos</h2>
+            <button class="text-white/30 hover:text-white transition-colors" onclick={() => (showAllStreamsModal = false)}>✕</button>
+         </div>
+         <div class="flex gap-1 shrink-0 border-b border-white/5">
+            <button
+               class="px-3 py-1.5 text-xs transition-colors {streamTab === 'input' ? 'text-white border-b-2 border-indigo-500' : 'text-white/40 hover:text-white/70'}"
+               onclick={() => (streamTab = "input")}
+            >
+               Input
+            </button>
+            <button
+               class="px-3 py-1.5 text-xs transition-colors {streamTab === 'output' ? 'text-white border-b-2 border-indigo-500' : 'text-white/40 hover:text-white/70'}"
+               onclick={() => (streamTab = "output")}
+            >
+               Output
+            </button>
+         </div>
+         <div class="flex-1 overflow-y-auto flex flex-col gap-4" style="scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;">
+            {#each fileInfos as file, i (file.path)}
+               {@const log = streamTab === "input" ? fileInputLogs[i] : fileStreamLogs[i]}
+               {#if log}
+                  <div class="flex flex-col gap-1">
+                     <span class="text-[11px] text-white/40 font-medium truncate">{file.name}</span>
+                     <pre class="whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 px-3 py-2 font-mono text-xs text-white/60">{log}</pre>
+                  </div>
+               {/if}
+            {/each}
+            {#if !Object.keys(streamTab === "input" ? fileInputLogs : fileStreamLogs).length}
+               <div class="flex flex-1 items-center justify-center text-xs text-white/25">
+                  Todavía no hay nada.
+               </div>
+            {/if}
+         </div>
+      </div>
+   </div>
 {/if}
 
 <div class="flex h-full flex-col">
@@ -305,7 +405,11 @@
             <div class="flex flex-1 flex-col gap-4 min-h-0">
                <!-- Progreso global -->
                <div class="flex flex-col gap-2 shrink-0">
-                  <div class="flex items-center justify-between">
+                  <button
+                     class="flex items-center justify-between text-left rounded-lg -mx-2 px-2 py-1 transition-colors hover:bg-white/5"
+                     onclick={() => (showAllStreamsModal = true)}
+                     title="Ver el stream del modelo para todos los archivos"
+                  >
                      <span class="text-3xl font-semibold tabular-nums text-white">
                         {globalPercent}<span class="text-lg text-white/30">%</span>
                      </span>
@@ -316,7 +420,7 @@
                         {/if}
                         {#if cancelling}<span class="text-red-400/70 ml-2">deteniendo...</span>{/if}
                      </span>
-                  </div>
+                  </button>
                   <ProgressBar
                      value={linesGlobalTotal > 0 ? linesGlobalDone / linesGlobalTotal : 0}
                      running={progress.running}
@@ -339,6 +443,7 @@
                            active={isFileActive(i)}
                            done={isFileDone(i)}
                            elapsedSeconds={fileElapsed(i)}
+                           onRowClick={() => (openFileStream = i)}
                         />
                      {/each}
                   </div>

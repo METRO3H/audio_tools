@@ -16,11 +16,18 @@
    let publisherInfo = $state("");
    let showInfoModal = $state(false);
 
-   let presets = $state([]);
-   let activePreset = $state("");
-   let basePrompt = $state("");
+   let languages = $state([]); // ["japanese", "chinese", ...] — carpetas de prompts/
+   let selectedLanguage = $state("");
+   let translationPrompt = $state("");
    let promptDirty = $state(false);
    let showPromptModal = $state(false);
+   let glossaryText = $state("");
+   let glossaryDirty = $state(false);
+   let showGlossaryModal = $state(false);
+
+   function languageLabel(lang) {
+      return lang ? lang.charAt(0).toUpperCase() + lang.slice(1) : "";
+   }
 
    let models = $state([]);
    let selectedModel = $state("");
@@ -41,11 +48,13 @@
          models = await bridge.list_translation_models();
          if (models.length && !selectedModel) selectedModel = models[0];
 
-         presets = await bridge.list_prompt_presets("chapters");
-         if (presets.length && !activePreset) {
-            activePreset = presets[0];
-            basePrompt = await bridge.get_prompt_preset("chapters", activePreset);
+         languages = await bridge.list_prompt_languages();
+         if (languages.length && !selectedLanguage) {
+            selectedLanguage = languages.includes("japanese") ? "japanese" : languages[0];
+            translationPrompt = await bridge.get_translation_prompt(selectedLanguage, "chapters");
+            glossaryText = await bridge.get_glossary(selectedLanguage);
             promptDirty = false;
+            glossaryDirty = false;
          }
       })();
    });
@@ -72,37 +81,28 @@
       done = null;
    }
 
-   // ── Presets ──────────────────────────────────────────────────────────────────
+   // ── Idioma / prompt / glosario ──────────────────────────────────────────────
 
-   async function onSelectPreset(name) {
-      activePreset = name;
-      basePrompt = await bridge.get_prompt_preset("chapters", name);
+   async function onSelectLanguage(lang) {
+      selectedLanguage = lang;
+      translationPrompt = await bridge.get_translation_prompt(lang, "chapters");
+      glossaryText = await bridge.get_glossary(lang);
       promptDirty = false;
+      glossaryDirty = false;
    }
    function onPromptEdit() {
       promptDirty = true;
    }
-   async function savePreset() {
-      if (!activePreset) return;
-      await bridge.save_prompt_preset("chapters", activePreset, basePrompt);
+   async function savePrompt() {
+      await bridge.save_translation_prompt(selectedLanguage, "chapters", translationPrompt);
       promptDirty = false;
    }
-   async function saveAsPreset() {
-      const name = prompt("Nombre del nuevo preset:");
-      if (!name) return;
-      await bridge.save_prompt_preset("chapters", name, basePrompt);
-      presets = await bridge.list_prompt_presets("chapters");
-      activePreset = name;
-      promptDirty = false;
+   function onGlossaryEdit() {
+      glossaryDirty = true;
    }
-   async function deletePreset() {
-      if (!activePreset) return;
-      if (!confirm(`¿Borrar el preset "${activePreset}"?`)) return;
-      await bridge.delete_prompt_preset("chapters", activePreset);
-      presets = await bridge.list_prompt_presets("chapters");
-      activePreset = presets[0] ?? "";
-      basePrompt = activePreset ? await bridge.get_prompt_preset("chapters", activePreset) : "";
-      promptDirty = false;
+   async function saveGlossary() {
+      await bridge.save_glossary(selectedLanguage, glossaryText);
+      glossaryDirty = false;
    }
 
    // ── Eventos de progreso propios ──────────────────────────────────────────────
@@ -137,7 +137,8 @@
          outputPath,
          chapters,
          publisherInfo,
-         basePrompt,
+         translationPrompt,
+         glossaryText,
          selectedModel,
          nGpuLayers,
          nCtx,
@@ -184,19 +185,48 @@
          </div>
          <div class="flex items-center gap-2 shrink-0">
             <select
-               value={activePreset}
-               onchange={(e) => onSelectPreset(e.target.value)}
+               value={selectedLanguage}
+               onchange={(e) => onSelectLanguage(e.target.value)}
                class="flex-1 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
             >
-               {#each presets as p (p)}<option value={p}>{p}</option>{/each}
+               {#each languages as lang (lang)}<option value={lang}>{languageLabel(lang)}</option>{/each}
             </select>
-            <button class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10" onclick={savePreset} title="Guardar">💾</button>
-            <button class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10" onclick={saveAsPreset} title="Guardar como">📄</button>
-            <button class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-red-400 hover:bg-white/10" onclick={deletePreset} title="Borrar preset">🗑</button>
+            <button class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10" onclick={savePrompt} title="Guardar">💾</button>
          </div>
          <textarea
-            bind:value={basePrompt}
+            bind:value={translationPrompt}
             oninput={onPromptEdit}
+            class="w-full flex-1 min-h-[65vh] resize-none rounded-lg border border-white/10 bg-white/5 px-3 py-2
+               text-xs text-white/80 outline-none focus:border-indigo-500/50 transition-colors font-mono"
+         ></textarea>
+      </div>
+   </div>
+{/if}
+
+{#if showGlossaryModal}
+   <div class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" role="presentation" onclick={() => (showGlossaryModal = false)}></div>
+   <div class="fixed inset-0 z-50 flex items-center justify-center p-6">
+      <div class="w-full max-w-5xl max-h-[90vh] rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4">
+         <div class="flex items-center justify-between">
+            <h2 class="text-sm font-semibold text-white">Glossary {glossaryDirty ? "· sin guardar" : ""}</h2>
+            <button class="text-white/30 hover:text-white transition-colors" onclick={() => (showGlossaryModal = false)}>✕</button>
+         </div>
+         <p class="text-[11px] text-white/30 shrink-0">
+            Términos fijos por idioma, compartidos entre .srt, chapters y filenames — se inyectan solos en el prompt final.
+         </p>
+         <div class="flex items-center gap-2 shrink-0">
+            <select
+               value={selectedLanguage}
+               onchange={(e) => onSelectLanguage(e.target.value)}
+               class="flex-1 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
+            >
+               {#each languages as lang (lang)}<option value={lang}>{languageLabel(lang)}</option>{/each}
+            </select>
+            <button class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10" onclick={saveGlossary} title="Guardar">💾</button>
+         </div>
+         <textarea
+            bind:value={glossaryText}
+            oninput={onGlossaryEdit}
             class="w-full flex-1 min-h-[65vh] resize-none rounded-lg border border-white/10 bg-white/5 px-3 py-2
                text-xs text-white/80 outline-none focus:border-indigo-500/50 transition-colors font-mono"
          ></textarea>
@@ -246,15 +276,15 @@
                <span class="text-xs text-yellow-400">⚠ Este archivo no tiene chapters embebidos</span>
             {/if}
 
-            <!-- Info publisher + Prompt en una fila -->
-            <div class="grid grid-cols-2 gap-2">
+            <!-- Info publisher + Prompt + Glossary en una fila -->
+            <div class="grid grid-cols-3 gap-2">
                <button
                   class="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20"
                   onclick={() => (showInfoModal = true)}
                >
-                  <span class="text-white/60 truncate">Info publisher</span>
+                  <span class="text-white/60 truncate">Info</span>
                   <span class="{publisherInfo.trim() ? 'text-emerald-400' : 'text-white/30'} shrink-0 ml-2">
-                     {publisherInfo.trim() ? "✓" : "opcional"}
+                     {publisherInfo.trim() ? "✓" : "—"}
                   </span>
                </button>
                <button
@@ -262,7 +292,14 @@
                   onclick={() => (showPromptModal = true)}
                >
                   <span class="text-white/60 truncate">Prompt</span>
-                  <span class="text-white/30 shrink-0 ml-2 truncate">{activePreset || "sin preset"}{promptDirty ? " ·" : ""}</span>
+                  <span class="text-white/30 shrink-0 ml-2 truncate">{languageLabel(selectedLanguage)}{promptDirty ? " ·" : ""}</span>
+               </button>
+               <button
+                  class="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20"
+                  onclick={() => (showGlossaryModal = true)}
+               >
+                  <span class="text-white/60 truncate">Glossary</span>
+                  <span class="text-white/30 shrink-0 ml-2 truncate">{languageLabel(selectedLanguage)}{glossaryDirty ? " ·" : ""}</span>
                </button>
             </div>
 
@@ -354,3 +391,5 @@
       </div>
    </main>
 </div>
+
+

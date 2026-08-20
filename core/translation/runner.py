@@ -46,6 +46,12 @@ class TranslateRunner:
 
     on_file_done(idx, success, elapsed): elapsed en segundos, medido
     desde el started_at de ese mismo archivo.
+
+    on_block_stream(file_index, text): texto crudo acumulado en vivo de
+    CADA llamada al modelo durante la fase de bloques — el intento
+    normal y cualquier reintento (ver translate_block en model_manager).
+    Se acumula del lado del frontend por archivo, para poder abrir un
+    modal con "que hizo el modelo para este archivo puntual".
     """
 
     def __init__(self) -> None:
@@ -69,6 +75,7 @@ class TranslateRunner:
         raw_title: str = "",
         raw_publisher_info: str = "",
         base_prompt: str = "",
+        glossary: str = "",
         model: str = "",
         n_gpu_layers: int | None = None,
         n_ctx: int | None = None,
@@ -85,16 +92,19 @@ class TranslateRunner:
         on_file_done: Callable[[int, bool, float], None] | None = None,
         on_queue_progress: Callable[[int, int], None] | None = None,
         on_queue_done: Callable[[int, int], None] | None = None,
+        on_block_stream: Callable[[int, str], None] | None = None,
+        on_block_input: Callable[[int, str], None] | None = None,
     ) -> None:
         self._cancelled = False
         threading.Thread(
             target=self._queue_worker,
             args=(
-                files, raw_title, raw_publisher_info, base_prompt,
+                files, raw_title, raw_publisher_info, base_prompt, glossary,
                 model, n_gpu_layers, n_ctx, temperature,
                 on_log, on_phase, on_step, on_title, on_work_info,
                 on_work_info_stream, on_title_stream, on_lines_progress,
                 on_file_start, on_file_done, on_queue_progress, on_queue_done,
+                on_block_stream, on_block_input,
             ),
             daemon=True,
         ).start()
@@ -103,11 +113,12 @@ class TranslateRunner:
 
     def _queue_worker(
         self,
-        files, raw_title, raw_publisher_info, base_prompt,
+        files, raw_title, raw_publisher_info, base_prompt, glossary,
         model, n_gpu_layers, n_ctx, temperature,
         on_log, on_phase, on_step, on_title, on_work_info,
         on_work_info_stream, on_title_stream, on_lines_progress,
         on_file_start, on_file_done, on_queue_progress, on_queue_done,
+        on_block_stream, on_block_input,
     ):
         def log(msg):
             if on_log:
@@ -152,7 +163,7 @@ class TranslateRunner:
                 phase("Generando work info...")
                 log("Generando work info del publisher...")
                 work_info = self._manager.generate_text(
-                    prompts.get_system_prompt("srt", "work_info_extraction"), raw_publisher_info.strip(),
+                    prompts.get_shared_prompt("work_info_extraction"), raw_publisher_info.strip(),
                     temperature=temp,
                     on_stream=(lambda tokens, text: on_work_info_stream(text)) if on_work_info_stream else None,
                 )
@@ -179,7 +190,7 @@ class TranslateRunner:
                         f"[Title to translate]:\n{raw_title.strip()}"
                     )
                 title = self._manager.generate_text(
-                    prompts.get_system_prompt("srt", "title_translation"), user_msg,
+                    prompts.get_shared_prompt("title_translation"), user_msg,
                     temperature=temp,
                     on_stream=(lambda tokens, text: on_title_stream(text)) if on_title_stream else None,
                 )
@@ -194,7 +205,7 @@ class TranslateRunner:
                 return
 
             # 3 ── Prompt de sistema final, armado una sola vez para toda la cola
-            system_prompt = build_system_prompt(base_prompt, title, work_info)
+            system_prompt = build_system_prompt(base_prompt, glossary, title, work_info)
 
             # 4 ── Cola de archivos
             step("blocks", "active")
@@ -224,6 +235,8 @@ class TranslateRunner:
                     context = ""
                     all_translated = []
                     lines_done_in_file_base = 0  # lineas de bloques ya terminados en este archivo
+                    block_history_text = ""   # historial COMMITEADO de output de bloques ya terminados
+                    block_history_input = ""  # historial COMMITEADO de input de bloques ya terminados
 
                     for b_idx, block in enumerate(blocks):
                         if self._cancelled:
@@ -241,11 +254,47 @@ class TranslateRunner:
                             global_done = min(lines_done_global_base + file_done, lines_total_global)
                             on_lines_progress(idx, file_done, lines_total_file, global_done, lines_total_global)
 
+                        # boxes mutables (no closure/nonlocal) para poder leer, ya
+                        # afuera del callback, el ultimo texto en vivo de este
+                        # bloque (intento + reintentos incluidos) y commitearlo
+                        # al historial permanente del archivo — uno para lo que
+                        # el modelo devuelve, otro para lo que se le mando
+                        block_trace_box = [""]
+                        block_input_box = [""]
+                        block_header = f"═══ Bloque {b_idx + 1}/{n_blocks} ═══"
+                        output_hist_snapshot = block_history_text
+                        input_hist_snapshot = block_history_input
+
+                        def on_block_text(tokens, text, _idx=idx, _header=block_header, _hist=output_hist_snapshot):
+                            block_trace_box[0] = text
+                            if on_block_stream:
+                                live = f"{_header}\n{text}"
+                                on_block_stream(_idx, (_hist + "\n\n" if _hist else "") + live)
+
+                        def on_block_input_text(text, _idx=idx, _header=block_header, _hist=input_hist_snapshot):
+                            block_input_box[0] = text
+                            if on_block_input:
+                                live = f"{_header}\n{text}"
+                                on_block_input(_idx, (_hist + "\n\n" if _hist else "") + live)
+
                         translated = self._manager.translate_block(
                             block, context, system_prompt,
                             temperature=temp, on_line_progress=on_line_progress,
+                            on_stream=on_block_text, on_input=on_block_input_text, on_retry_log=log,
                         )
                         all_translated.extend(translated)
+
+                        # el bloque termino: lo que quedo en los boxes es el
+                        # trace completo (intento normal + reintentos resueltos),
+                        # se commitea al historial permanente del archivo
+                        block_history_text = (
+                            (block_history_text + "\n\n" if block_history_text else "") +
+                            f"{block_header}\n{block_trace_box[0]}"
+                        )
+                        block_history_input = (
+                            (block_history_input + "\n\n" if block_history_input else "") +
+                            f"{block_header}\n{block_input_box[0]}"
+                        )
 
                         translated_text = "\n".join(
                             f"  [{l['id']}] {l['text']}" for l in translated
@@ -293,3 +342,4 @@ class TranslateRunner:
         except Exception as exc:
             log(f"[error fatal] {exc}")
             if on_queue_done: on_queue_done(0, total_files)
+

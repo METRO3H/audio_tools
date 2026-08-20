@@ -21,10 +21,9 @@ TRANSCRIBE_INITIAL_PROMPT: str = ""
 
 # ── Traduccion (LLM local, sin server) ──────────────────────────────────
 TRANSLATION_MODELS_DIR    = ROOT_DIR / "models"
-TRANSLATION_N_GPU_LAYERS  = 20     # default conservador para 4GB VRAM (GTX 1650) -
-                                    # ajustable desde la UI por corrida; si tu modelo
-                                    # no entra completo en VRAM, baja este numero
-TRANSLATION_N_CTX         = 4096
+TRANSLATION_N_GPU_LAYERS  = 36
+                                    
+TRANSLATION_N_CTX         = 14096
 TRANSLATION_TEMPERATURE   = 0.3
 TRANSLATION_BLOCK_SIZE    = 15
 TRANSLATION_CONTEXT_LINES = 4
