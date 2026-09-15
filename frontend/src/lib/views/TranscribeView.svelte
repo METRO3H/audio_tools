@@ -6,8 +6,19 @@
    import ProcessingView from "$lib/views/shared/ProcessingView.svelte";
    import ViewHeader from "$lib/views/shared/ViewHeader.svelte";
    import HoverCard from "$lib/components/HoverCard.svelte";
+   import BaseFolderPicker from "$lib/components/BaseFolderPicker.svelte";
+   import Spinner from "$lib/components/Spinner.svelte";
    import { basename, folderName } from "$lib/utils.js";
+   import { persistentConfig } from "$lib/stores/persistentConfig.js";
+
    let { goHome } = $props();
+
+   // ── Selección local / remoto ─────────────────────────────────────────────────
+   // mode: null (todavía sin elegir) | "local" | "remote"
+   let mode = $state(null);
+   let checkingRemote = $state(false);
+   let remoteError = $state("");
+   let remoteInfo = $state(null); // { host, port, models } una vez encontrado
 
    // ── Constantes ───────────────────────────────────────────────────────────────
 
@@ -59,23 +70,45 @@
    let outputFormat = $state("srt");
    let outputSubfolder = $state("ja");
 
-   // ── Inicialización desde config ───────────────────────────────────────────────
+   // ── Cargar configuración guardada ────────────────────────────────────────────
 
    $effect(() => {
-      if (appConfig.loaded) {
+      const saved = persistentConfig.get("transcribe_config");
+      if (saved) {
+         modelSize = saved.modelSize ?? "medium";
+         device = saved.device ?? "cuda";
+         computeType = saved.computeType ?? "int8_float16";
+         beamSize = saved.beamSize ?? 5;
+         language = saved.language ?? "ja";
+         vadFilter = saved.vadFilter ?? true;
+         conditionOnPrev = saved.conditionOnPrev ?? false;
+         wordTimestamps = saved.wordTimestamps ?? true;
+         initialPrompt = saved.initialPrompt ?? "";
+         outputFormat = saved.outputFormat ?? "srt";
+         outputSubfolder = saved.outputSubfolder ?? "ja";
+      }
+      // Inicializar desde config.py si no hay guardado
+      if (!saved && appConfig.loaded) {
          initialPrompt = appConfig.transcribeInitialPrompt ?? "";
       }
    });
-   $effect(() => {
-      outputSubfolder = LANGUAGE_FOLDERS[language] ?? language;
-   });
 
-   // Reset compute type al cambiar device
+   // ── Guardar configuración al cambiar ────────────────────────────────────────
+
    $effect(() => {
-      const available = COMPUTE_BY_DEVICE[device];
-      if (!available.includes(computeType)) {
-         computeType = available[0];
-      }
+      persistentConfig.set("transcribe_config", {
+         modelSize,
+         device,
+         computeType,
+         beamSize,
+         language,
+         vadFilter,
+         conditionOnPrev,
+         wordTimestamps,
+         initialPrompt,
+         outputFormat,
+         outputSubfolder,
+      });
    });
 
    // ── Derivados ────────────────────────────────────────────────────────────────
@@ -86,14 +119,11 @@
 
    const canRun = $derived(fileInfos.length >= 1 && !!appConfig.baseFolder && !progress.running);
 
-   // ── Carga ────────────────────────────────────────────────────────────────────
+   const modelSizesToShow = $derived(
+      mode === "remote" && remoteInfo ? remoteInfo.models : MODEL_SIZES,
+   );
 
-   async function pickBaseFolder() {
-      const folder = await bridge.pick_folder();
-      if (!folder) return;
-      appConfig.setBaseFolder(folder);
-      await loadAudios(folder);
-   }
+   // ── Carga ────────────────────────────────────────────────────────────────────
 
    async function loadAudios(folder) {
       const result = await bridge.scan_audio_parts_or_audios(folder);
@@ -127,6 +157,43 @@
       fileInfos = fileInfos.filter((f) => f.path !== path);
    }
 
+   // ── Selección local / remoto ─────────────────────────────────────────────────
+
+   function selectLocal() {
+      mode = "local";
+   }
+
+   async function selectRemote() {
+      checkingRemote = true;
+      remoteError = "";
+      const result = await bridge.check_remote_server();
+      checkingRemote = false;
+
+      if (!result.found) {
+         remoteError = "No se encontró el server mediador en la red. ¿Está prendido?";
+         return;
+      }
+      if (result.state === "busy" || result.state === "loading") {
+         remoteError = `El mediador está ocupado en este momento (modelo: ${
+            result.busy_model ?? "desconocido"
+         }). Probá de nuevo en un rato.`;
+         return;
+      }
+
+      remoteInfo = result;
+      // Si el modelo que tenías elegido no está disponible en este
+      // mediador en particular, caemos al primero que sí lo esté.
+      if (result.models.length && !result.models.includes(modelSize)) {
+         modelSize = result.models[0];
+      }
+      mode = "remote";
+   }
+
+   function changeMode() {
+      mode = null;
+      remoteError = "";
+   }
+
    // ── Ejecutar ─────────────────────────────────────────────────────────────────
 
    async function run() {
@@ -149,6 +216,8 @@
          wordTimestamps,
          initialPrompt,
          outputFormat,
+         mode === "remote" ? remoteInfo.host : null,
+         mode === "remote" ? remoteInfo.port : null,
       );
    }
 
@@ -162,7 +231,65 @@
    }
 </script>
 
-{#if processing}
+{#if mode === null}
+   <div class="flex h-full flex-col">
+      <ViewHeader title="Transcribe" {goHome} />
+
+      <main class="flex flex-1 items-center justify-center px-8">
+         <div class="flex w-full max-w-2xl items-stretch gap-6">
+            <!-- Remoto -->
+            <div class="flex flex-1 flex-col gap-2">
+               <button
+                  class="group flex flex-1 flex-col items-center justify-center gap-3
+                     rounded-2xl border border-white/10 bg-white/5 p-8 text-center
+                     transition-all duration-200 hover:border-white/20 hover:bg-white/10
+                     hover:scale-[1.02] active:scale-[0.98] cursor-pointer
+                     disabled:cursor-wait disabled:opacity-60 disabled:hover:scale-100"
+                  onclick={selectRemote}
+                  disabled={checkingRemote}
+               >
+                  {#if checkingRemote}
+                     <Spinner size={28} />
+                     <span class="text-xs text-white/40">Buscando mediador en la red...</span>
+                  {:else}
+                     <span class="text-3xl">🌐</span>
+                     <span class="text-sm font-semibold text-white tracking-wide">
+                        Transcribir en remoto
+                     </span>
+                     <span class="text-xs text-white/50 leading-relaxed">
+                        Usa el server mediador de la red para transcribir sin cargar
+                        el modelo en esta PC.
+                     </span>
+                  {/if}
+               </button>
+               {#if remoteError}
+                  <span class="text-xs text-yellow-400 text-center">{remoteError}</span>
+               {/if}
+            </div>
+
+            <!-- Separador vertical -->
+            <div class="w-px self-stretch bg-white/10"></div>
+
+            <!-- Local -->
+            <button
+               class="group flex flex-1 flex-col items-center justify-center gap-3
+                  rounded-2xl border border-white/10 bg-white/5 p-8 text-center
+                  transition-all duration-200 hover:border-white/20 hover:bg-white/10
+                  hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+               onclick={selectLocal}
+            >
+               <span class="text-3xl">💻</span>
+               <span class="text-sm font-semibold text-white tracking-wide">
+                  Transcribir en esta PC
+               </span>
+               <span class="text-xs text-white/50 leading-relaxed">
+                  Carga el modelo localmente, como siempre.
+               </span>
+            </button>
+         </div>
+      </main>
+   </div>
+{:else if processing}
    <ProcessingView
       title="Transcribe"
       {goHome}
@@ -174,25 +301,19 @@
    />
 {:else}
    <div class="flex h-full flex-col">
-      <ViewHeader title="Transcribe" {goHome} />
+      <ViewHeader title={mode === "remote" ? "Transcribe (remoto)" : "Transcribe"} {goHome} />
 
       <main class="flex flex-1 flex-col items-center overflow-y-auto px-8 py-10">
          <div class="flex w-full max-w-md flex-col gap-5">
-            <!-- Carpeta base -->
-            <div class="flex flex-col gap-1.5">
-               <span class="text-xs text-white/40">Carpeta base</span>
-               <button
-                  class="flex items-center gap-2 rounded-lg border border-white/10
-                   bg-white/5 px-3 py-2 text-xs text-left transition-all
-                   hover:border-white/20"
-                  onclick={pickBaseFolder}
-               >
-                  <span>📁</span>
-                  <span class="truncate text-white/60">
-                     {appConfig.baseFolder || "Sin seleccionar"}
-                  </span>
-               </button>
-            </div>
+            <button
+               class="self-start text-xs text-white/30 hover:text-white transition-colors"
+               onclick={changeMode}
+            >
+               ← Cambiar modo (local/remoto)
+            </button>
+
+            <!-- Carpeta base con botón abrir -->
+            <BaseFolderPicker onPick={loadAudios} />
 
             <!-- Archivos -->
             <div class="flex flex-col gap-1.5">
@@ -274,7 +395,7 @@
                   />
                </div>
                <div class="flex flex-wrap gap-1.5">
-                  {#each MODEL_SIZES as size (size)}
+                  {#each modelSizesToShow as size (size)}
                      <button
                         class="rounded-md px-3 py-1.5 text-xs transition-colors
                        {modelSize === size
@@ -286,6 +407,11 @@
                      </button>
                   {/each}
                </div>
+               {#if mode === "remote" && modelSizesToShow.length === 0}
+                  <span class="text-xs text-yellow-400">
+                     Este mediador no tiene ningún modelo copiado en whisper_models/ todavía.
+                  </span>
+               {/if}
             </div>
 
             <!-- Device -->

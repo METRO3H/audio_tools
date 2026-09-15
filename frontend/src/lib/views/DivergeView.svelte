@@ -2,7 +2,7 @@
    import { bridge } from "$lib/stores/bridge.svelte.js";
    import { progress } from "$lib/stores/progress.svelte.js";
    import { appConfig } from "$lib/stores/config.svelte.js";
-
+import { persistentConfig } from "$lib/stores/persistentConfig.js";
    import ProcessingView from "$lib/views/shared/ProcessingView.svelte";
    import ViewHeader from "$lib/views/shared/ViewHeader.svelte";
    import { basename, folderName } from "$lib/utils.js";
@@ -22,6 +22,28 @@
    let outputFolder = $state("");
    let useSubfolder = $state(true);
    let autoHint = $state("");
+
+
+   // ── Cargar configuración guardada ────────────────────────────────────────────
+$effect(() => {
+  const saved = persistentConfig.get('diverge_config');
+  if (saved) {
+    mediaType = saved.mediaType ?? "audio";
+    segmentMode = saved.segmentMode ?? "chapters";
+    intervalMins = saved.intervalMins ?? 20;
+    useSubfolder = saved.useSubfolder ?? true;
+  }
+});
+
+// ── Guardar configuración al cambiar ────────────────────────────────────────
+$effect(() => {
+  persistentConfig.set('diverge_config', {
+    mediaType,
+    segmentMode,
+    intervalMins,
+    useSubfolder,
+  });
+});
 
    // ── Derivados ────────────────────────────────────────────────────────────────
 

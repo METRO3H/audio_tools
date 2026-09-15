@@ -2,7 +2,8 @@
    import { bridge } from "$lib/stores/bridge.svelte.js";
    import { progress } from "$lib/stores/progress.svelte.js";
    import { appConfig } from "$lib/stores/config.svelte.js";
-   import { basename, folderName } from '$lib/utils.js'
+   import { basename, folderName } from "$lib/utils.js";
+   import { persistentConfig } from "$lib/stores/persistentConfig.js";
    import ProcessingView from "$lib/views/shared/ProcessingView.svelte";
    import ViewHeader from "$lib/views/shared/ViewHeader.svelte";
 
@@ -26,6 +27,23 @@
 
    const formats = $derived(mediaType === "audio" ? AUDIO_FORMATS : VIDEO_FORMATS);
    const exts = $derived(mediaType === "audio" ? AUDIO_EXTS : VIDEO_EXTS);
+
+   // ── Cargar configuración guardada ────────────────────────────────────────────
+$effect(() => {
+  const saved = persistentConfig.get('merge_config');
+  if (saved) {
+    mediaType = saved.mediaType ?? "audio";
+    outputFormat = saved.outputFormat ?? "mp3";
+  }
+});
+
+// ── Guardar configuración al cambiar ────────────────────────────────────────
+$effect(() => {
+  persistentConfig.set('merge_config', {
+    mediaType,
+    outputFormat,
+  });
+});
 
    // Al cambiar tipo, resetea formato y archivos
    $effect(() => {
@@ -178,7 +196,7 @@
                {/if}
 
                {#if fileInfos.length}
-                  <ul class="flex flex-col gap-1 max-h-40 overflow-y-auto ">
+                  <ul class="flex flex-col gap-1 max-h-40 overflow-y-auto">
                      {#each fileInfos as file (file.path)}
                         <li
                            class="flex items-center justify-between rounded-lg

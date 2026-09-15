@@ -5,6 +5,8 @@
 
    import TranslateProcessingView from "$lib/views/shared/TranslateProcessingView.svelte";
    import ViewHeader from "$lib/views/shared/ViewHeader.svelte";
+   import BaseFolderPicker from "$lib/components/BaseFolderPicker.svelte";
+   import { persistentConfig } from "$lib/stores/persistentConfig.js";
 
    let { goHome } = $props();
 
@@ -39,6 +41,33 @@
    let nCtx = $state(4096);
    let temperature = $state(0.3);
 
+   // ── Cargar configuración guardada ────────────────────────────────────────────
+
+   $effect(() => {
+      const saved = persistentConfig.get("translate_srt_config");
+      if (saved) {
+         selectedLanguage = saved.selectedLanguage ?? "";
+         selectedModel = saved.selectedModel ?? "";
+         nGpuLayers = saved.nGpuLayers ?? 20;
+         nCtx = saved.nCtx ?? 4096;
+         temperature = saved.temperature ?? 0.3;
+         outputSubfolder = saved.outputSubfolder ?? "english";
+      }
+   });
+
+   // ── Guardar configuración al cambiar ────────────────────────────────────────
+
+   $effect(() => {
+      persistentConfig.set("translate_srt_config", {
+         selectedLanguage,
+         selectedModel,
+         nGpuLayers,
+         nCtx,
+         temperature,
+         outputSubfolder,
+      });
+   });
+
    // ── Carga inicial ────────────────────────────────────────────────────────────
 
    $effect(() => {
@@ -63,20 +92,11 @@
       appConfig.baseFolder ? `${appConfig.baseFolder}\\transcriptions\\${outputSubfolder}` : "",
    );
 
-   const canRun = $derived(
-      fileInfos.length > 0 && !!appConfig.baseFolder && !!selectedModel && !progress.running,
-   );
+   const canRun = $derived(fileInfos.length > 0 && !!appConfig.baseFolder && !!selectedModel && !progress.running);
 
    const hasTitleOrInfo = $derived(!!rawTitle.trim() || !!rawPublisherInfo.trim());
 
    // ── Carga / auto-scan ────────────────────────────────────────────────────────
-
-   async function pickBaseFolder() {
-      const folder = await bridge.pick_folder();
-      if (!folder) return;
-      appConfig.setBaseFolder(folder);
-      await loadSrt(folder);
-   }
 
    async function loadSrt(folder) {
       const result = await bridge.scan_translate_input(folder);
@@ -154,6 +174,7 @@
          nGpuLayers,
          nCtx,
          temperature,
+         selectedLanguage,
       );
    }
 
@@ -174,7 +195,9 @@
       onclick={() => (showTitleInfoModal = false)}
    ></div>
    <div class="fixed inset-0 z-50 flex items-center justify-center p-6">
-      <div class="w-full max-w-xl max-h-[85vh] overflow-y-auto rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4">
+      <div
+         class="w-full max-w-xl max-h-[85vh] overflow-y-auto rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4"
+      >
          <div class="flex items-center justify-between">
             <h2 class="text-sm font-semibold text-white">Título / info del publisher</h2>
             <button
@@ -229,15 +252,14 @@
       onclick={() => (showPromptModal = false)}
    ></div>
    <div class="fixed inset-0 z-50 flex items-center justify-center p-6">
-      <div class="w-full max-w-5xl max-h-[90vh] rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4">
+      <div
+         class="w-full max-w-5xl max-h-[90vh] rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4"
+      >
          <div class="flex items-center justify-between">
             <h2 class="text-sm font-semibold text-white">
                Prompt {promptDirty ? "· sin guardar" : ""}
             </h2>
-            <button
-               class="text-white/30 hover:text-white transition-colors"
-               onclick={() => (showPromptModal = false)}
-            >
+            <button class="text-white/30 hover:text-white transition-colors" onclick={() => (showPromptModal = false)}>
                ✕
             </button>
          </div>
@@ -253,7 +275,11 @@
                   <option value={lang}>{languageLabel(lang)}</option>
                {/each}
             </select>
-            <button class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10" onclick={savePrompt} title="Guardar">
+            <button
+               class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10"
+               onclick={savePrompt}
+               title="Guardar"
+            >
                💾
             </button>
          </div>
@@ -275,20 +301,20 @@
       onclick={() => (showGlossaryModal = false)}
    ></div>
    <div class="fixed inset-0 z-50 flex items-center justify-center p-6">
-      <div class="w-full max-w-5xl max-h-[90vh] rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4">
+      <div
+         class="w-full max-w-5xl max-h-[90vh] rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4"
+      >
          <div class="flex items-center justify-between">
             <h2 class="text-sm font-semibold text-white">
                Glossary {glossaryDirty ? "· sin guardar" : ""}
             </h2>
-            <button
-               class="text-white/30 hover:text-white transition-colors"
-               onclick={() => (showGlossaryModal = false)}
-            >
+            <button class="text-white/30 hover:text-white transition-colors" onclick={() => (showGlossaryModal = false)}>
                ✕
             </button>
          </div>
          <p class="text-[11px] text-white/30 shrink-0">
-            Términos fijos por idioma, compartidos entre .srt, chapters y filenames — se inyectan solos en el prompt final.
+            Términos fijos por idioma, compartidos entre .srt, chapters y filenames — se inyectan solos en el prompt
+            final.
          </p>
 
          <div class="flex items-center gap-2 shrink-0">
@@ -302,7 +328,11 @@
                   <option value={lang}>{languageLabel(lang)}</option>
                {/each}
             </select>
-            <button class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10" onclick={saveGlossary} title="Guardar">
+            <button
+               class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10"
+               onclick={saveGlossary}
+               title="Guardar"
+            >
                💾
             </button>
          </div>
@@ -318,13 +348,7 @@
 {/if}
 
 {#if processing}
-   <TranslateProcessingView
-      {goHome}
-      {fileInfos}
-      {outputPath}
-      onCancel={cancel}
-      onBack={goBack}
-   />
+   <TranslateProcessingView {goHome} {fileInfos} {outputPath} onCancel={cancel} onBack={goBack} />
 {:else}
    <div class="flex h-full flex-col">
       <ViewHeader title="Translate" {goHome} />
@@ -332,20 +356,7 @@
       <main class="flex flex-1 flex-col items-center overflow-y-auto px-8 py-10">
          <div class="flex w-full max-w-md flex-col gap-5">
             <!-- Carpeta base -->
-            <div class="flex flex-col gap-1.5">
-               <span class="text-xs text-white/40">Carpeta base</span>
-               <button
-                  class="flex items-center gap-2 rounded-lg border border-white/10
-                   bg-white/5 px-3 py-2 text-xs text-left transition-all
-                   hover:border-white/20"
-                  onclick={pickBaseFolder}
-               >
-                  <span>📁</span>
-                  <span class="truncate text-white/60">
-                     {appConfig.baseFolder || "Sin seleccionar"}
-                  </span>
-               </button>
-            </div>
+            <BaseFolderPicker onPick={loadSrt} />
 
             <!-- Archivos -->
             <div class="flex flex-col gap-1.5">
@@ -519,4 +530,3 @@
       </main>
    </div>
 {/if}
-

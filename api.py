@@ -11,9 +11,11 @@ Convención de eventos JS:
     audiotools:log               { detail: { message: str } }
     audiotools:progress          { detail: { value: float } }
     audiotools:file              { detail: { index: int, done: bool, started_at?: float, elapsed?: float } }
-    audiotools:done              { detail: { success: bool, elapsed?: float } }
+    audiotools:done              { detail: { success: bool, elapsed?: float, cancelled?: bool } }
+    audiotools:translate:stats   { detail: { run_id: int|null, ...RunStats } } — una vez, al terminar
     audiotools:translate:block_stream  { detail: { file_index: int, text: str } }
     audiotools:translate:block_input   { detail: { file_index: int, text: str } }
+    audiotools:translate:system_prompt { detail: { text: str } }
 
 Los campos started_at/elapsed en audiotools:file y elapsed en audiotools:done
 son opcionales — hoy solo los manda run_translate() (.srt). started_at es un
@@ -27,6 +29,9 @@ import json
 import sys
 import time
 from pathlib import Path
+import os
+import subprocess
+import sys
 
 import webview
 
@@ -52,11 +57,11 @@ from core.translation import prompts as translation_prompts
 
 from util.image_optimizer import optimize_image, SUPPORTED_EXTS
 
-# ── Constantes compartidas ────────────────────────────────────────────────────
+# — Constantes compartidas —————————————————————————————————————————————————
 _AUDIO_EXTS = {'.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus'}
 _VIDEO_EXTS = {'.mp4', '.mkv', '.avi', '.mov', '.webm'}
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# — Helpers —————————————————————————————————————————————————————————————————
 
 
 def _emit(window: webview.Window, event: str, detail: dict) -> None:
@@ -117,7 +122,7 @@ def _make_sequential_callbacks(window: webview.Window, total: int):
 
     return on_log, on_progress, on_file_start, on_file_done
 
-# ── API ────────────────────────────────────────────────────────────────────────
+# — API —————————————————————————————————————————————————————————————————————
 
 
 class AudioToolsAPI:
@@ -133,12 +138,13 @@ class AudioToolsAPI:
         self._translate_runner = TranslateRunner()
         self._chapters_runner = ChaptersTranslateRunner()
         self._filenames_runner = FilenameTranslateRunner()
+        self._active_remote_runner = None  # RemoteWhisperRunner en curso, si hay uno
 
     def set_window(self, window: webview.Window) -> None:
         """Llamado desde main.py una vez que la ventana está lista."""
         self._window = window
 
-    # ── Utilidades ─────────────────────────────────────────────────────────────
+    # — Utilidades ———————————————————————————————————————————————————————————
 
     def get_config(self) -> dict:
         """Devuelve la configuración base al frontend."""
@@ -158,6 +164,8 @@ class AudioToolsAPI:
         self._translate_runner.cancel()
         self._chapters_runner.cancel()
         self._filenames_runner.cancel()
+        if self._active_remote_runner is not None:
+            self._active_remote_runner.cancel()
 
         # Fallback: si el proceso sigue vivo tras terminate(), lo mata
         if sys.platform == "win32":
@@ -178,7 +186,7 @@ class AudioToolsAPI:
         if except_ != "filenames":
             self._filenames_runner.unload()
 
-    # ── Merge ──────────────────────────────────────────────────────────────────
+    # — Merge —————————————————————————————————————————————————————————————————
 
     def run_merge(
         self,
@@ -263,7 +271,7 @@ class AudioToolsAPI:
             duration=total_duration,
         )
 
-    # ── Diverge ────────────────────────────────────────────────────────────────
+    # — Diverge ———————————————————————————————————————————————————————————————
 
     def run_diverge(
         self,
@@ -325,7 +333,8 @@ class AudioToolsAPI:
             on_file_done=on_file_done,
             durations=durations,
         )
-    # ── Audio to Video ─────────────────────────────────────────────────────────
+
+    # — Audio to Video ——————————————————————————————————————————————————————
 
     def run_audio_to_video(
         self,
@@ -378,7 +387,37 @@ class AudioToolsAPI:
             durations=durations,
         )
 
-    # ── Transcribe ─────────────────────────────────────────────────────────────
+    # — Transcribe ——————————————————————————————————————————————————————————
+
+    def check_remote_server(self) -> dict:
+        """
+        Busca el mediador en la red (discovery UDP) y, si lo encuentra,
+        pregunta su estado y qué modelos tiene disponibles — todo en un
+        solo llamado para que la card remota del frontend no necesite
+        tres viajes separados. Nunca lanza excepción: cualquier
+        problema de red se traduce en {"found": False}.
+        """
+        from core.network.mediator_client import MediatorClient, discover_mediator
+
+        found = discover_mediator()
+        if found is None:
+            return {"found": False}
+
+        try:
+            client = MediatorClient(found.host, found.port)
+            status = client.get_status()
+            models = client.get_available_models()
+        except Exception:
+            return {"found": False}
+
+        return {
+            "found": True,
+            "host": found.host,
+            "port": found.port,
+            "state": status["state"],
+            "busy_model": status["model"],
+            "models": models,
+        }
 
     def run_transcribe(
         self,
@@ -395,10 +434,31 @@ class AudioToolsAPI:
         word_timestamps:          bool = True,
         initial_prompt:           str = "",
         output_format:            str = "srt",
+        remote_host:              str | None = None,
+        remote_port:              int | None = None,
     ) -> None:
+        """
+        Si remote_host/remote_port vienen dados, transcribe contra el
+        mediador en vez de cargar faster-whisper en este proceso — todo
+        lo demás (armado de configs, escritura de archivos de salida,
+        eventos al frontend) es idéntico en ambos casos.
+        """
         from core.transcription.transcribe_action import TranscribeAction
         from core.models import TranscribeConfig
-        self._unload_all_translation_models()
+
+        is_remote = remote_host is not None and remote_port is not None
+
+        if is_remote:
+            from core.transcription.remote_whisper_runner import RemoteWhisperRunner
+            runner = RemoteWhisperRunner(remote_host, remote_port)
+            self._active_remote_runner = runner
+        else:
+            # Solo tiene sentido liberar VRAM local de traducción cuando
+            # el modelo de whisper también va a cargarse en esta misma
+            # máquina — un mediador remoto no compite por esa memoria.
+            self._unload_all_translation_models()
+            runner = self._whisper
+
         action = TranscribeAction()
         configs = [
             TranscribeConfig(
@@ -441,9 +501,14 @@ class AudioToolsAPI:
             })
 
         def on_done(success: bool, all_segments: list):
-            _emit(self._window, "audiotools:done", {"success": success})
+            detail = {"success": success}
+            if is_remote and getattr(runner, "was_cancelled", False):
+                detail["cancelled"] = True
+            _emit(self._window, "audiotools:done", detail)
+            if is_remote:
+                self._active_remote_runner = None
 
-        self._whisper.run_sequential(
+        runner.run_sequential(
             configs=configs,
             on_log=on_log,
             on_done=on_done,
@@ -452,7 +517,8 @@ class AudioToolsAPI:
             on_file_done=on_file_done,
         )
 
-    # ── Diálogos nativos ───────────────────────────────────────────────────────
+    # — Diálogos nativos ———————————————————————————————————————————————————
+
     def pick_files(self, file_types: list[str] | None = None, base_folder: str | None = None, media_type: str = 'audio') -> list[str]:
         if file_types:
             exts = ";".join(file_types)
@@ -688,7 +754,7 @@ class AudioToolsAPI:
             'error': 'No se encontraron .srt en ./transcriptions/japanese ni ./transcriptions/chinese',
         }
 
-    # ── Translate: .srt ────────────────────────────────────────────────────────
+    # — Translate: .srt —————————————————————————————————————————————————
 
     def run_translate(
         self,
@@ -703,6 +769,7 @@ class AudioToolsAPI:
         n_gpu_layers: int | None = None,
         n_ctx: int | None = None,
         temperature: float | None = None,
+        source_language: str = "",
     ) -> None:
         """
         Traduce una cola de .srt (todos deben pertenecer a la misma obra,
@@ -773,9 +840,11 @@ class AudioToolsAPI:
                 "file_progress": 0, "completed": done, "total": total,
             })
 
-        def on_queue_done(succeeded, total):
+        def on_queue_done(succeeded, total, cancelled):
+            success = succeeded > 0 and not cancelled
             _emit(self._window, "audiotools:done", {
-                "success": succeeded > 0,
+                "success": success,
+                "cancelled": cancelled,
                 "elapsed": time.time() - queue_started_at,
             })
 
@@ -786,6 +855,14 @@ class AudioToolsAPI:
         def on_block_input(file_index, text):
             _emit(self._window, "audiotools:translate:block_input",
                   {"file_index": file_index, "text": text})
+
+        def on_system_prompt(text):
+            _emit(self._window, "audiotools:translate:system_prompt",
+                  {"text": text})
+
+        def on_stats(run_id, stats):
+            _emit(self._window, "audiotools:translate:stats",
+                  {"run_id": run_id, **stats})
 
         self._translate_runner.run_queue(
             files=files,
@@ -811,6 +888,8 @@ class AudioToolsAPI:
             on_queue_done=on_queue_done,
             on_block_stream=on_block_stream,
             on_block_input=on_block_input,
+            on_system_prompt=on_system_prompt,
+            on_stats=on_stats,
         )
 
     def cancel_translate(self) -> None:
@@ -819,7 +898,7 @@ class AudioToolsAPI:
     def list_translation_models(self) -> list[str]:
         return self._translate_runner.list_models()
 
-    # ── Translate: chapters ────────────────────────────────────────────────────
+    # — Translate: chapters ——————————————————————————————————————
 
     def run_translate_chapters(
         self,
@@ -882,7 +961,7 @@ class AudioToolsAPI:
     def cancel_translate_chapters(self) -> None:
         self._chapters_runner.cancel()
 
-    # ── Translate: nombres de archivo ───────────────────────────────────────────
+    # — Translate: nombres de archivo ——————————————————————————
 
     def scan_filenames_folder(self, folder: str) -> list[dict]:
         """
@@ -973,7 +1052,7 @@ class AudioToolsAPI:
         pairs = [(r[0], r[1]) for r in renames]
         return self._filenames_runner.apply_renames(pairs)
 
-    # ── Translate: prompts por idioma (compartidos entre los tres kinds) ───────
+    # — Translate: prompts por idioma ———————————————————————
 
     def list_prompt_languages(self) -> list[str]:
         return translation_prompts.list_languages()
@@ -990,4 +1069,10 @@ class AudioToolsAPI:
     def save_glossary(self, language: str, content: str) -> None:
         translation_prompts.save_glossary(language, content)
 
+    def open_directory(self, path: str) -> None:
+        """Abre la carpeta con el explorador de archivos del sistema."""
 
+        if sys.platform == "win32":
+            os.startfile(path)
+        else:
+            subprocess.Popen(["xdg-open", path])

@@ -4,6 +4,7 @@
    import { appConfig } from "$lib/stores/config.svelte.js";
    import Spinner from "$lib/components/Spinner.svelte";
    import ProcessingView from "$lib/views/shared/ProcessingView.svelte";
+   import { persistentConfig } from "$lib/stores/persistentConfig.js";
    import ViewHeader from "$lib/views/shared/ViewHeader.svelte";
    import { basename, folderName } from "$lib/utils.js";
    let { goHome } = $props();
@@ -41,7 +42,32 @@
            ? ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow"]
            : ["fast", "medium", "slow"],
    );
+// ── Cargar configuración guardada ────────────────────────────────────────────
+$effect(() => {
+  const saved = persistentConfig.get('audio_to_video_config');
+  if (saved) {
+    encoder = saved.encoder ?? "cpu";
+    fps = saved.fps ?? 1;
+    crf = saved.crf ?? 23;
+    preset = saved.preset ?? "medium";
+    resolution = saved.resolution ?? "1280x720";
+    copyAudio = saved.copyAudio ?? true;
+    showAdvanced = saved.showAdvanced ?? false;
+  }
+});
 
+// ── Guardar configuración al cambiar ────────────────────────────────────────
+$effect(() => {
+  persistentConfig.set('audio_to_video_config', {
+    encoder,
+    fps,
+    crf,
+    preset,
+    resolution,
+    copyAudio,
+    showAdvanced,
+  });
+});
    $effect(() => {
       // Reset preset al cambiar encoder si no es válido
       if (!presetOptions.includes(preset)) {

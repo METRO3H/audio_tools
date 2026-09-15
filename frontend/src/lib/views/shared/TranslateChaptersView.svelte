@@ -5,6 +5,8 @@
    import ViewHeader from "$lib/views/shared/ViewHeader.svelte";
    import LogsModal from "$lib/components/LogsModal.svelte";
    import Spinner from "$lib/components/Spinner.svelte";
+   import BaseFolderPicker from "$lib/components/BaseFolderPicker.svelte";
+   import { persistentConfig } from "$lib/stores/persistentConfig.js";
 
    let { goHome } = $props();
 
@@ -41,6 +43,31 @@
    let showLogs = $state(false);
    let done = $state(null); // null | true | false
 
+   // ── Cargar configuración guardada ────────────────────────────────────────────
+
+   $effect(() => {
+      const saved = persistentConfig.get("translate_chapters_config");
+      if (saved) {
+         selectedLanguage = saved.selectedLanguage ?? "";
+         selectedModel = saved.selectedModel ?? "";
+         nGpuLayers = saved.nGpuLayers ?? 20;
+         nCtx = saved.nCtx ?? 4096;
+         temperature = saved.temperature ?? 0.3;
+      }
+   });
+
+   // ── Guardar configuración al cambiar ────────────────────────────────────────
+
+   $effect(() => {
+      persistentConfig.set("translate_chapters_config", {
+         selectedLanguage,
+         selectedModel,
+         nGpuLayers,
+         nCtx,
+         temperature,
+      });
+   });
+
    // ── Carga inicial ────────────────────────────────────────────────────────────
 
    $effect(() => {
@@ -61,9 +88,7 @@
 
    // ── Derivados ────────────────────────────────────────────────────────────────
 
-   const outputPath = $derived(
-      fileInfo ? fileInfo.path.replace(/(\.[^./\\]+)$/, " [EN]$1") : "",
-   );
+   const outputPath = $derived(fileInfo ? fileInfo.path.replace(/(\.[^./\\]+)$/, " [EN]$1") : "");
    const canRun = $derived(!!fileInfo && chapters.length > 0 && !!selectedModel && !processing);
 
    // ── Archivo ──────────────────────────────────────────────────────────────────
@@ -152,12 +177,20 @@
 </script>
 
 {#if showInfoModal}
-   <div class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" role="presentation" onclick={() => (showInfoModal = false)}></div>
+   <div
+      class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+      role="presentation"
+      onclick={() => (showInfoModal = false)}
+   ></div>
    <div class="fixed inset-0 z-50 flex items-center justify-center p-6">
-      <div class="w-full max-w-xl max-h-[85vh] overflow-y-auto rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4">
+      <div
+         class="w-full max-w-xl max-h-[85vh] overflow-y-auto rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4"
+      >
          <div class="flex items-center justify-between">
             <h2 class="text-sm font-semibold text-white">Info del publisher</h2>
-            <button class="text-white/30 hover:text-white transition-colors" onclick={() => (showInfoModal = false)}>✕</button>
+            <button class="text-white/30 hover:text-white transition-colors" onclick={() => (showInfoModal = false)}
+               >✕</button
+            >
          </div>
          <textarea
             bind:value={publisherInfo}
@@ -167,7 +200,10 @@
                text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
          ></textarea>
          <div class="flex justify-end">
-            <button class="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-medium text-white hover:bg-indigo-500 transition-colors" onclick={() => (showInfoModal = false)}>
+            <button
+               class="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-medium text-white hover:bg-indigo-500 transition-colors"
+               onclick={() => (showInfoModal = false)}
+            >
                Listo
             </button>
          </div>
@@ -176,12 +212,20 @@
 {/if}
 
 {#if showPromptModal}
-   <div class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" role="presentation" onclick={() => (showPromptModal = false)}></div>
+   <div
+      class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+      role="presentation"
+      onclick={() => (showPromptModal = false)}
+   ></div>
    <div class="fixed inset-0 z-50 flex items-center justify-center p-6">
-      <div class="w-full max-w-5xl max-h-[90vh] rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4">
+      <div
+         class="w-full max-w-5xl max-h-[90vh] rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4"
+      >
          <div class="flex items-center justify-between">
             <h2 class="text-sm font-semibold text-white">Prompt {promptDirty ? "· sin guardar" : ""}</h2>
-            <button class="text-white/30 hover:text-white transition-colors" onclick={() => (showPromptModal = false)}>✕</button>
+            <button class="text-white/30 hover:text-white transition-colors" onclick={() => (showPromptModal = false)}
+               >✕</button
+            >
          </div>
          <div class="flex items-center gap-2 shrink-0">
             <select
@@ -191,7 +235,11 @@
             >
                {#each languages as lang (lang)}<option value={lang}>{languageLabel(lang)}</option>{/each}
             </select>
-            <button class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10" onclick={savePrompt} title="Guardar">💾</button>
+            <button
+               class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10"
+               onclick={savePrompt}
+               title="Guardar">💾</button
+            >
          </div>
          <textarea
             bind:value={translationPrompt}
@@ -204,15 +252,24 @@
 {/if}
 
 {#if showGlossaryModal}
-   <div class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" role="presentation" onclick={() => (showGlossaryModal = false)}></div>
+   <div
+      class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+      role="presentation"
+      onclick={() => (showGlossaryModal = false)}
+   ></div>
    <div class="fixed inset-0 z-50 flex items-center justify-center p-6">
-      <div class="w-full max-w-5xl max-h-[90vh] rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4">
+      <div
+         class="w-full max-w-5xl max-h-[90vh] rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4"
+      >
          <div class="flex items-center justify-between">
             <h2 class="text-sm font-semibold text-white">Glossary {glossaryDirty ? "· sin guardar" : ""}</h2>
-            <button class="text-white/30 hover:text-white transition-colors" onclick={() => (showGlossaryModal = false)}>✕</button>
+            <button class="text-white/30 hover:text-white transition-colors" onclick={() => (showGlossaryModal = false)}
+               >✕</button
+            >
          </div>
          <p class="text-[11px] text-white/30 shrink-0">
-            Términos fijos por idioma, compartidos entre .srt, chapters y filenames — se inyectan solos en el prompt final.
+            Términos fijos por idioma, compartidos entre .srt, chapters y filenames — se inyectan solos en el prompt
+            final.
          </p>
          <div class="flex items-center gap-2 shrink-0">
             <select
@@ -222,7 +279,11 @@
             >
                {#each languages as lang (lang)}<option value={lang}>{languageLabel(lang)}</option>{/each}
             </select>
-            <button class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10" onclick={saveGlossary} title="Guardar">💾</button>
+            <button
+               class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10"
+               onclick={saveGlossary}
+               title="Guardar">💾</button
+            >
          </div>
          <textarea
             bind:value={glossaryText}
@@ -292,14 +353,18 @@
                   onclick={() => (showPromptModal = true)}
                >
                   <span class="text-white/60 truncate">Prompt</span>
-                  <span class="text-white/30 shrink-0 ml-2 truncate">{languageLabel(selectedLanguage)}{promptDirty ? " ·" : ""}</span>
+                  <span class="text-white/30 shrink-0 ml-2 truncate"
+                     >{languageLabel(selectedLanguage)}{promptDirty ? " ·" : ""}</span
+                  >
                </button>
                <button
                   class="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20"
                   onclick={() => (showGlossaryModal = true)}
                >
                   <span class="text-white/60 truncate">Glossary</span>
-                  <span class="text-white/30 shrink-0 ml-2 truncate">{languageLabel(selectedLanguage)}{glossaryDirty ? " ·" : ""}</span>
+                  <span class="text-white/30 shrink-0 ml-2 truncate"
+                     >{languageLabel(selectedLanguage)}{glossaryDirty ? " ·" : ""}</span
+                  >
                </button>
             </div>
 
@@ -319,18 +384,36 @@
             <div class="grid grid-cols-3 gap-3">
                <div class="flex flex-col gap-1.5">
                   <label class="text-[11px] text-white/40" for="gpuLayers">GPU layers</label>
-                  <input id="gpuLayers" type="number" bind:value={nGpuLayers} min="0"
-                     class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white text-center outline-none focus:border-indigo-500/50 transition-colors" />
+                  <input
+                     id="gpuLayers"
+                     type="number"
+                     bind:value={nGpuLayers}
+                     min="0"
+                     class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white text-center outline-none focus:border-indigo-500/50 transition-colors"
+                  />
                </div>
                <div class="flex flex-col gap-1.5">
                   <label class="text-[11px] text-white/40" for="ctx">Contexto</label>
-                  <input id="ctx" type="number" bind:value={nCtx} min="512" step="512"
-                     class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white text-center outline-none focus:border-indigo-500/50 transition-colors" />
+                  <input
+                     id="ctx"
+                     type="number"
+                     bind:value={nCtx}
+                     min="512"
+                     step="512"
+                     class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white text-center outline-none focus:border-indigo-500/50 transition-colors"
+                  />
                </div>
                <div class="flex flex-col gap-1.5">
                   <label class="text-[11px] text-white/40" for="temp">Temperatura</label>
-                  <input id="temp" type="number" bind:value={temperature} min="0" max="2" step="0.1"
-                     class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white text-center outline-none focus:border-indigo-500/50 transition-colors" />
+                  <input
+                     id="temp"
+                     type="number"
+                     bind:value={temperature}
+                     min="0"
+                     max="2"
+                     step="0.1"
+                     class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white text-center outline-none focus:border-indigo-500/50 transition-colors"
+                  />
                </div>
             </div>
 
@@ -363,11 +446,17 @@
 
             <div class="flex gap-2">
                {#if processing}
-                  <button class="flex-1 rounded-lg border border-red-500/30 py-2 text-xs text-red-400 hover:bg-red-500/10 transition-colors" onclick={cancel}>
+                  <button
+                     class="flex-1 rounded-lg border border-red-500/30 py-2 text-xs text-red-400 hover:bg-red-500/10 transition-colors"
+                     onclick={cancel}
+                  >
                      Detener
                   </button>
                {/if}
-               <button class="flex-1 rounded-lg border border-white/10 py-2 text-xs text-white/60 hover:text-white transition-colors" onclick={() => (showLogs = true)}>
+               <button
+                  class="flex-1 rounded-lg border border-white/10 py-2 text-xs text-white/60 hover:text-white transition-colors"
+                  onclick={() => (showLogs = true)}
+               >
                   Ver logs
                </button>
             </div>
@@ -375,13 +464,18 @@
             {#if done !== null && !processing}
                <div class="flex gap-2">
                   {#if done === true}
-                     <button class="flex-1 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-xs text-white/60 hover:text-white transition-colors" onclick={() => bridge.open_folder(outputPath)}>
+                     <button
+                        class="flex-1 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-xs text-white/60 hover:text-white transition-colors"
+                        onclick={() => bridge.open_folder(outputPath)}
+                     >
                         Abrir carpeta
                      </button>
                   {/if}
                   <button
                      class="flex-1 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-medium text-white hover:bg-indigo-500 transition-colors"
-                     onclick={() => { done = null; }}
+                     onclick={() => {
+                        done = null;
+                     }}
                   >
                      Volver
                   </button>
@@ -391,5 +485,3 @@
       </div>
    </main>
 </div>
-
-
