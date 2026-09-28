@@ -46,7 +46,7 @@ desktop.ini
 # ── General ───────────────────────────────────────────────────────────────────
 *.log
 *.txt
-
+!requirements.txt
 # ml models
 models/
 

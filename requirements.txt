@@ -1,0 +1,9 @@
+# requirements.txt
+requests>=2.31
+websocket-client>=1.7
+pywebview
+faster-whisper
+llama-cpp-python
+lingua-language-detector
+langid
+Pillow
