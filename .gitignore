@@ -39,3 +39,10 @@ dist/
 
 # ml models
 models/
+
+dist_ui/
+exports/
+
+stats/
+
+node_modules/
