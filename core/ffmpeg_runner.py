@@ -86,13 +86,12 @@ class FFmpegRunner:
 
     def _worker(self, args, on_log, on_done, on_progress, duration):
         success = self._run_single(args, on_log, on_progress, duration)
-        if on_progress:
+        if on_progress and success:  # ← solo si completó con éxito
             on_progress(1.0)
         on_done(success)
 
     def _sequential_worker(self, args_list, on_log, on_done, on_progress, on_file_start, on_file_done, durations):
         for i, args in enumerate(args_list):
-            # Verificar cancelación antes de iniciar cada archivo
             if self._cancelled:
                 on_done(False)
                 return
@@ -103,7 +102,7 @@ class FFmpegRunner:
             if not self._run_single(args, on_log, on_progress, duration):
                 on_done(False)
                 return
-            if on_progress:
+            if on_progress:  # ← aquí también, solo si no fue cancelado
                 on_progress(1.0)
             if on_file_done:
                 on_file_done(i)
