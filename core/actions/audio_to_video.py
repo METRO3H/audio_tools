@@ -1,3 +1,4 @@
+
 from pathlib import Path
 from core.models import AudioToVideoConfig
 
@@ -70,3 +71,4 @@ class AudioToVideoAction:
             "-shortest",
             str(output),
         ]
+

@@ -1,3 +1,4 @@
+
 import json
 import subprocess
 from pathlib import Path
@@ -53,3 +54,4 @@ def get_chapters(ffprobe_path: Path, file: Path) -> list[dict]:
         ]
     except (json.JSONDecodeError, KeyError, ValueError):
         return []
+

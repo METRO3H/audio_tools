@@ -1,3 +1,4 @@
+
 """
 Runner que habla con el mediador remoto en vez de cargar faster-whisper
 en este mismo proceso.
@@ -190,3 +191,4 @@ class RemoteWhisperRunner:
         except Exception as exc:  # mismo criterio amplio que usa WhisperRunner local
             on_log(f"[error] {exc}")
             on_done(False, all_segments)
+

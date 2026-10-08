@@ -1,3 +1,4 @@
+
 from pathlib import Path
 from typing import Callable
 import subprocess
@@ -130,3 +131,4 @@ class MergeAudioAction:
             ]
             cursor += dur
         self._METADATA_FILE.write_text("\n".join(lines), encoding="utf-8")
+

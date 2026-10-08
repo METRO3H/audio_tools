@@ -1,3 +1,4 @@
+
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -50,3 +51,4 @@ class TranscribeConfig:
     word_timestamps:          bool  = True
     initial_prompt:           str   = ""
     output_format:            str   = "srt"
+

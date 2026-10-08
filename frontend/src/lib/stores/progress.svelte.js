@@ -1,3 +1,4 @@
+
 /**
  * progress.svelte.js
  * ───────────────────
@@ -90,3 +91,4 @@ if (typeof window !== "undefined") {
       }
    });
 }
+

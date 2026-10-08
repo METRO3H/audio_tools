@@ -1,3 +1,4 @@
+
 from pathlib import Path
 
 
@@ -74,3 +75,4 @@ class TranscribeAction:
         else:
             content = build_txt(segments)
         output_path.write_text(content, encoding="utf-8")
+

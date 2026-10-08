@@ -1,3 +1,4 @@
+
 <script>
   /**
    * ProgressBar.svelte
@@ -54,3 +55,4 @@
     <span>{percent}%</span>
   </div>
 </div>
+

@@ -1,3 +1,4 @@
+
 <script>
   /**
    * LogPanel.svelte
@@ -41,3 +42,4 @@
     {/each}
   {/if}
 </div>
+

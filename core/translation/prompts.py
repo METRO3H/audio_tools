@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import re
@@ -147,3 +148,4 @@ def build_short_text_prompt(base_prompt: str, glossary: str = "", work_info: str
     if work_info:
         parts.append(f"\n[Work info — context for this work]:\n{work_info.strip()}")
     return "\n".join(parts)
+

@@ -1,3 +1,4 @@
+
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
@@ -46,7 +47,7 @@ desktop.ini
 # ── General ───────────────────────────────────────────────────────────────────
 *.log
 *.txt
-!requirements.txt
+
 # ml models
 models/
 
@@ -68,3 +69,4 @@ frontend/static/**/*.jpeg
 frontend/static/**/*.webp
 frontend/public/**/*.svg
 frontend/src/**/*.svg
+

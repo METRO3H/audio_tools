@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import re
@@ -7,7 +8,7 @@ from typing import Callable
 
 import config
 from core.lang_detect import detect_language
-from core.translation.model_manager import ModelManager
+from core.translation.model_manager import ModelManager, TranslationBackend
 from core.translation import prompts
 
 _INVALID_WIN_CHARS = re.compile(r'[<>:"/\\|?*]')
@@ -31,8 +32,8 @@ class FilenameTranslateRunner:
     propios.
     """
 
-    def __init__(self) -> None:
-        self._manager = ModelManager()
+    def __init__(self, backend: TranslationBackend | None = None) -> None:
+        self._manager = ModelManager(backend=backend)
         self._cancelled = False
 
     # ── API publica ──────────────────────────────────────────────────────
@@ -208,3 +209,4 @@ class FilenameTranslateRunner:
             if not candidate.exists():
                 return candidate
             i += 1
+

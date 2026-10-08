@@ -1,3 +1,4 @@
+
 from pathlib import Path
 
 # ── Rutas base ────────────────────────────────────────────────────────────────
@@ -55,3 +56,4 @@ TRANSLATION_STATS_DB      = ROOT_DIR / "stats" / "translation_stats.db"
 # respaldo simplemente no esta disponible — se loguea, no rompe la corrida.
 FALLBACK_TRANSLATION_MODEL_DIR = ROOT_DIR / "models" / "nllb-200-distilled-600M-ct2"
 FALLBACK_TRANSLATION_TOKENIZER = "facebook/nllb-200-distilled-600M"
+

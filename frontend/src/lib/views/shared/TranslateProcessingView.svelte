@@ -1,3 +1,4 @@
+
 <script>
    import { onDestroy } from "svelte";
    import { bridge } from "$lib/stores/bridge.svelte.js";
@@ -932,3 +933,4 @@
       {/if}
    </main>
 </div>
+

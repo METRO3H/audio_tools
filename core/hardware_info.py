@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 """
@@ -77,3 +78,4 @@ def get_vram_snapshot(device_index: int = 0) -> VramSnapshot | None:
             pynvml.nvmlShutdown()
         except Exception:
             pass
+

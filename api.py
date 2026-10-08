@@ -1,3 +1,4 @@
+
 """
 api.py
 ------
@@ -23,6 +24,15 @@ timestamp epoch (segundos) que manda el backend al arrancar un archivo, para
 que el frontend arme un contador en vivo sin pedirle nada mas al backend;
 elapsed es el tiempo final medido por el propio backend (mas preciso que
 calcularlo en JS).
+
+Las tres tools de traduccion (.srt, chapters, filenames) aceptan
+remote_host/remote_port opcionales, igual que run_transcribe(): si vienen
+dados, el modelo se carga y corre en el mediador de la LAN en vez de esta
+PC. Arma bloques, reintentos, contexto y el fallback offline siguen
+corriendo en este proceso sin importar el modo — lo unico que cambia es
+donde se ejecuta cada llamada puntual al modelo (ver
+core/translation/remote_backend.py). Por eso los eventos que emite cada
+tool son EXACTAMENTE los mismos en local y en remoto.
 """
 
 import json
@@ -138,7 +148,11 @@ class AudioToolsAPI:
         self._translate_runner = TranslateRunner()
         self._chapters_runner = ChaptersTranslateRunner()
         self._filenames_runner = FilenameTranslateRunner()
-        self._active_remote_runner = None  # RemoteWhisperRunner en curso, si hay uno
+        # RemoteWhisperRunner, o TranslateRunner/ChaptersTranslateRunner/
+        # FilenameTranslateRunner con un RemoteLlamaBackend, en curso —
+        # nunca más de uno a la vez (todas las tools son mutuamente
+        # excluyentes en esta ventana), así que un solo slot alcanza.
+        self._active_remote_runner = None
 
     def set_window(self, window: webview.Window) -> None:
         """Llamado desde main.py una vez que la ventana está lista."""
@@ -178,6 +192,13 @@ class AudioToolsAPI:
         Coordinación de VRAM entre los 3 traductores LLM (srt/chapters/
         filenames), cada uno con su propio ModelManager/proceso. 'except_'
         deja cargado el que está por arrancar; el resto se descarga.
+
+        Solo tiene sentido llamarla cuando la tool que está por arrancar
+        va a cargar su modelo EN ESTA MISMA MÁQUINA — si va a correr
+        contra un mediador remoto, no compite por esta VRAM local (ver
+        run_translate/run_translate_chapters/run_translate_filenames_preview,
+        que la saltan por completo en modo remoto, igual que ya hace
+        run_transcribe con self._whisper.unload()).
         """
         if except_ != "srt":
             self._translate_runner.unload()
@@ -392,9 +413,9 @@ class AudioToolsAPI:
     def check_remote_server(self) -> dict:
         """
         Busca el mediador en la red (discovery UDP) y, si lo encuentra,
-        pregunta su estado y qué modelos tiene disponibles — todo en un
-        solo llamado para que la card remota del frontend no necesite
-        tres viajes separados. Nunca lanza excepción: cualquier
+        pregunta su estado y qué modelos de WHISPER tiene disponibles —
+        todo en un solo llamado para que la card remota del frontend no
+        necesite tres viajes separados. Nunca lanza excepción: cualquier
         problema de red se traduce en {"found": False}.
         """
         from core.network.mediator_client import MediatorClient, discover_mediator
@@ -407,6 +428,36 @@ class AudioToolsAPI:
             client = MediatorClient(found.host, found.port)
             status = client.get_status()
             models = client.get_available_models()
+        except Exception:
+            return {"found": False}
+
+        return {
+            "found": True,
+            "host": found.host,
+            "port": found.port,
+            "state": status["state"],
+            "busy_model": status["model"],
+            "models": models,
+        }
+
+    def check_remote_translation_server(self) -> dict:
+        """
+        Igual que check_remote_server(), pero para traducción: mismo
+        descubrimiento y mismo /status (el mediador solo soporta un job
+        a la vez sea cual sea el tipo, así que "ocupado" significa lo
+        mismo para las dos), pero devuelve los modelos .gguf disponibles
+        en vez de los de whisper. Nunca lanza excepción.
+        """
+        from core.network.mediator_client import MediatorClient, discover_mediator
+
+        found = discover_mediator()
+        if found is None:
+            return {"found": False}
+
+        try:
+            client = MediatorClient(found.host, found.port)
+            status = client.get_status()
+            models = client.get_translation_models()
         except Exception:
             return {"found": False}
 
@@ -770,14 +821,28 @@ class AudioToolsAPI:
         n_ctx: int | None = None,
         temperature: float | None = None,
         source_language: str = "",
+        remote_host: str | None = None,
+        remote_port: int | None = None,
     ) -> None:
         """
         Traduce una cola de .srt (todos deben pertenecer a la misma obra,
         ya que titulo/work_info se generan una sola vez para toda la corrida).
         Salida en {base_folder}/transcriptions/{output_subfolder}.
+
+        Si remote_host/remote_port vienen dados, el modelo se carga y
+        corre en el mediador en vez de esta PC — ver el docstring del
+        módulo, arriba.
         """
-        self._whisper.unload()
-        self._unload_all_translation_models(except_="srt")
+        is_remote = remote_host is not None and remote_port is not None
+
+        if is_remote:
+            from core.translation.remote_backend import RemoteLlamaBackend
+            runner = TranslateRunner(backend=RemoteLlamaBackend(remote_host, remote_port))
+            self._active_remote_runner = runner
+        else:
+            self._whisper.unload()
+            self._unload_all_translation_models(except_="srt")
+            runner = self._translate_runner
 
         out_dir = Path(base_folder) / "transcriptions" / output_subfolder
         files = [(Path(p), out_dir / Path(p).name) for p in file_paths]
@@ -847,6 +912,8 @@ class AudioToolsAPI:
                 "cancelled": cancelled,
                 "elapsed": time.time() - queue_started_at,
             })
+            if is_remote:
+                self._active_remote_runner = None
 
         def on_block_stream(file_index, text):
             _emit(self._window, "audiotools:translate:block_stream",
@@ -864,7 +931,7 @@ class AudioToolsAPI:
             _emit(self._window, "audiotools:translate:stats",
                   {"run_id": run_id, **stats})
 
-        self._translate_runner.run_queue(
+        runner.run_queue(
             files=files,
             raw_title=raw_title,
             raw_publisher_info=raw_publisher_info,
@@ -874,6 +941,8 @@ class AudioToolsAPI:
             n_gpu_layers=n_gpu_layers,
             n_ctx=n_ctx,
             temperature=temperature,
+            source_language=source_language,
+            output_subfolder=output_subfolder,
             on_log=on_log,
             on_phase=on_phase,
             on_step=on_step,
@@ -894,6 +963,8 @@ class AudioToolsAPI:
 
     def cancel_translate(self) -> None:
         self._translate_runner.cancel()
+        if self._active_remote_runner is not None:
+            self._active_remote_runner.cancel()
 
     def list_translation_models(self) -> list[str]:
         return self._translate_runner.list_models()
@@ -912,15 +983,29 @@ class AudioToolsAPI:
         n_gpu_layers: int | None = None,
         n_ctx: int | None = None,
         temperature: float | None = None,
+        remote_host: str | None = None,
+        remote_port: int | None = None,
     ) -> None:
         """
         Traduce los titulos de los chapters embebidos en file_path y genera
         una copia en output_path con esos titulos ya traducidos (re-mux,
         sin re-codificar). Independiente de la cola de .srt: preset y
         work_info propios.
+
+        Si remote_host/remote_port vienen dados, el modelo se carga y
+        corre en el mediador — el re-mux con ffmpeg (que necesita el
+        archivo en esta máquina) sigue siendo siempre local.
         """
-        self._whisper.unload()
-        self._unload_all_translation_models(except_="chapters")
+        is_remote = remote_host is not None and remote_port is not None
+
+        if is_remote:
+            from core.translation.remote_backend import RemoteLlamaBackend
+            runner = ChaptersTranslateRunner(backend=RemoteLlamaBackend(remote_host, remote_port))
+            self._active_remote_runner = runner
+        else:
+            self._whisper.unload()
+            self._unload_all_translation_models(except_="chapters")
+            runner = self._chapters_runner
 
         def on_log(msg):
             _emit(self._window, "audiotools:log", {"message": msg})
@@ -939,8 +1024,10 @@ class AudioToolsAPI:
         def on_done(success):
             _emit(self._window, "audiotools:chapters:done",
                   {"success": success})
+            if is_remote:
+                self._active_remote_runner = None
 
-        self._chapters_runner.run(
+        runner.run(
             input_file=Path(file_path),
             output_file=Path(output_path),
             chapters=chapters,
@@ -960,6 +1047,8 @@ class AudioToolsAPI:
 
     def cancel_translate_chapters(self) -> None:
         self._chapters_runner.cancel()
+        if self._active_remote_runner is not None:
+            self._active_remote_runner.cancel()
 
     # — Translate: nombres de archivo ——————————————————————————
 
@@ -980,6 +1069,8 @@ class AudioToolsAPI:
         n_gpu_layers: int | None = None,
         n_ctx: int | None = None,
         temperature: float | None = None,
+        remote_host: str | None = None,
+        remote_port: int | None = None,
     ) -> None:
         """
         Traduce (en background) los nombres marcados como needs_translation
@@ -987,9 +1078,21 @@ class AudioToolsAPI:
         todavia — emite audiotools:filenames:preview_done con el resultado
         para que el frontend muestre la vista previa con checkboxes antes
         de aplicar nada a disco.
+
+        Si remote_host/remote_port vienen dados, el modelo se carga y
+        corre en el mediador — scan()/apply_renames() (que tocan el disco
+        del cliente) siguen siendo siempre locales.
         """
-        self._whisper.unload()
-        self._unload_all_translation_models(except_="filenames")
+        is_remote = remote_host is not None and remote_port is not None
+
+        if is_remote:
+            from core.translation.remote_backend import RemoteLlamaBackend
+            runner = FilenameTranslateRunner(backend=RemoteLlamaBackend(remote_host, remote_port))
+            self._active_remote_runner = runner
+        else:
+            self._whisper.unload()
+            self._unload_all_translation_models(except_="filenames")
+            runner = self._filenames_runner
 
         def on_log(msg):
             _emit(self._window, "audiotools:log", {"message": msg})
@@ -1013,7 +1116,7 @@ class AudioToolsAPI:
 
         def worker():
             try:
-                result = self._filenames_runner.translate_preview(
+                result = runner.translate_preview(
                     files=files,
                     raw_publisher_info=raw_publisher_info,
                     base_prompt=base_prompt,
@@ -1037,11 +1140,16 @@ class AudioToolsAPI:
                 _emit(self._window, "audiotools:filenames:preview_done", {
                     "success": False, "files": [],
                 })
+            finally:
+                if is_remote:
+                    self._active_remote_runner = None
 
         threading.Thread(target=worker, daemon=True).start()
 
     def cancel_translate_filenames(self) -> None:
         self._filenames_runner.cancel()
+        if self._active_remote_runner is not None:
+            self._active_remote_runner.cancel()
 
     def apply_filename_renames(self, renames: list[list[str]]) -> dict:
         """

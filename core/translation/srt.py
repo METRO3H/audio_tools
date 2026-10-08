@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -42,3 +43,4 @@ def write_srt(path: Path, entries: list[SubtitleEntry]) -> None:
         text = "\n".join(e.lines)
         blocks.append(f"{e.index}\n{e.timestamp}\n{text}")
     path.write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
+

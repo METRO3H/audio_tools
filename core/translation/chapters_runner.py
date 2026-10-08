@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import subprocess
@@ -6,7 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 import config
-from core.translation.model_manager import ModelManager
+from core.translation.model_manager import ModelManager, TranslationBackend
 from core.translation import prompts
 
 
@@ -27,8 +28,8 @@ class ChaptersTranslateRunner:
 
     _METADATA_FILE = Path("_chapters_translate_metadata.txt")
 
-    def __init__(self) -> None:
-        self._manager = ModelManager()
+    def __init__(self, backend: TranslationBackend | None = None) -> None:
+        self._manager = ModelManager(backend=backend)
         self._cancelled = False
 
     # ── API publica ──────────────────────────────────────────────────────

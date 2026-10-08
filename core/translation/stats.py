@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 """
@@ -74,3 +75,4 @@ class RunStats:
     vram_measurement_method: str | None = None
 
     files: list[FileStats] = field(default_factory=list)
+

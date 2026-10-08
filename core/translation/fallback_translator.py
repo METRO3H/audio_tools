@@ -1,3 +1,4 @@
+
 """
 Traductor de respaldo, offline y liviano, para las pocas lineas que
 sobreviven a los reintentos del LLM principal sin traducirse de verdad
@@ -130,3 +131,4 @@ def translate_line(text: str, source_language: str) -> str:
         output_tokens = results[0].hypotheses[0][1:]  # saca el tag de idioma del prefix
         translated_ids = _tokenizer.convert_tokens_to_ids(output_tokens)
         return _tokenizer.decode(translated_ids, skip_special_tokens=True).strip()
+

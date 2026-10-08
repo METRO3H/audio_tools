@@ -1,3 +1,4 @@
+
 <script>
   /**
    * ViewHeader.svelte
@@ -22,3 +23,4 @@
   <span class="text-white/10">/</span>
   <h1 class="text-sm font-semibold">{title}</h1>
 </header>
+

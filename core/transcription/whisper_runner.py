@@ -1,3 +1,4 @@
+
 import threading
 from pathlib import Path
 from typing import Callable
@@ -164,3 +165,4 @@ class WhisperRunner:
                 self._model = None
                 self._model_key = None
                 gc.collect()
+

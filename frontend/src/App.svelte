@@ -1,3 +1,4 @@
+
 <script>
    import { bridgeReady } from "$lib/stores/bridge.svelte.js";
    import { appConfig } from "$lib/stores/config.svelte.js";
@@ -141,3 +142,4 @@
       {/key}
    {/if}
 </div>
+

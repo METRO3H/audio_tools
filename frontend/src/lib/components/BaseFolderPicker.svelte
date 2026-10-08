@@ -1,3 +1,4 @@
+
 <script>
   import { bridge } from '$lib/stores/bridge.svelte.js'
   import { appConfig } from '$lib/stores/config.svelte.js'
@@ -47,3 +48,4 @@
     {/if}
   </div>
 </div>
+

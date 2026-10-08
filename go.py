@@ -1,3 +1,4 @@
+
 """
 go.py
 ──────
@@ -39,3 +40,4 @@ if __name__ == "__main__":
     if "--build" in sys.argv:
         build()
     run()
+

@@ -1,3 +1,4 @@
+
 <script>
   /**
    * HoverCard.svelte
@@ -46,3 +47,4 @@
     </div>
   {/if}
 </span>
+

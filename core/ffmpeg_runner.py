@@ -1,3 +1,4 @@
+
 import re
 import subprocess
 import threading
@@ -119,3 +120,4 @@ class FFmpegRunner:
             h, m, s = match.groups()
             elapsed = int(h) * 3600 + int(m) * 60 + float(s)
             on_progress(min(elapsed / duration, 1.0))
+

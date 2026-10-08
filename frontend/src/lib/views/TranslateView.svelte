@@ -1,3 +1,4 @@
+
 <script>
    import ViewHeader from "$lib/views/shared/ViewHeader.svelte";
    import TranslateSrtView from "$lib/views/shared/TranslateSrtView.svelte";
@@ -61,3 +62,4 @@
       </main>
    </div>
 {/if}
+

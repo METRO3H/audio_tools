@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import re
@@ -152,3 +153,4 @@ def looks_untranslated(text: str) -> bool:
     """Wrapper booleano de `untranslated_reason` para callers que no
     necesitan el motivo puntual."""
     return untranslated_reason(text) is not None
+

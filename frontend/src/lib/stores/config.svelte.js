@@ -1,3 +1,4 @@
+
 /**
  * config.svelte.js
  * ─────────────────
@@ -39,3 +40,4 @@ export const appConfig = $state({
       this.baseFolder = this.defaultBaseFolder;
    },
 });
+

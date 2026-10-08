@@ -1,3 +1,4 @@
+
 <script>
   let { size = 20, color = 'text-indigo-400', duration = '1s' } = $props()
 </script>
@@ -25,3 +26,4 @@
   <path d="M2 12h4"></path>
   <path d="m4.9 4.9 2.9 2.9"></path>
 </svg>
+

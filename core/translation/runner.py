@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import dataclasses
@@ -8,8 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 import config
-from core.hardware_info import get_vram_snapshot
-from core.translation.model_manager import ModelManager
+from core.translation.model_manager import ModelManager, TranslationBackend
 from core.translation import prompts
 from core.translation import stats_db
 from core.translation.prompts import build_system_prompt
@@ -72,8 +72,8 @@ class TranslateRunner:
     (ver core/translation/stats.py:RunStats).
     """
 
-    def __init__(self) -> None:
-        self._manager = ModelManager()
+    def __init__(self, backend: TranslationBackend | None = None) -> None:
+        self._manager = ModelManager(backend=backend)
         self._cancelled = False
         self._was_cancelled = False  # Indica si la cola fue cancelada
 
@@ -189,7 +189,13 @@ class TranslateRunner:
             self._manager.load(model, n_gpu_layers, n_ctx)
             run_stats.model_load_seconds = time.time() - load_started_at
 
-            vram = get_vram_snapshot()
+            # get_vram_snapshot() del manager, no de core.hardware_info
+            # directo: si el backend es remoto, esto es lo que reporta
+            # el MEDIADOR al cargar, no la GPU de esta máquina (ver
+            # RemoteLlamaBackend.get_vram_snapshot()) — así gpu_name
+            # distingue una corrida local de una remota al comparar
+            # stats después.
+            vram = self._manager.get_vram_snapshot()
             if vram:
                 run_stats.gpu_vendor = vram.vendor
                 run_stats.gpu_name = vram.name
@@ -462,3 +468,4 @@ class TranslateRunner:
 
             if on_stats:
                 on_stats(run_id, dataclasses.asdict(run_stats))
+

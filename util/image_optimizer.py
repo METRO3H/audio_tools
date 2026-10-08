@@ -1,3 +1,4 @@
+
 from pathlib import Path
 
 from PIL import Image
@@ -46,3 +47,4 @@ def optimize_image(image_path: Path) -> Path:
             return opt_path
 
     return opt_path
+

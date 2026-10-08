@@ -1,3 +1,4 @@
+
 <script>
    import { bridge } from "$lib/stores/bridge.svelte.js";
    import { progress } from "$lib/stores/progress.svelte.js";
@@ -6,9 +7,20 @@
    import TranslateProcessingView from "$lib/views/shared/TranslateProcessingView.svelte";
    import ViewHeader from "$lib/views/shared/ViewHeader.svelte";
    import BaseFolderPicker from "$lib/components/BaseFolderPicker.svelte";
+   import Spinner from "$lib/components/Spinner.svelte";
    import { persistentConfig } from "$lib/stores/persistentConfig.js";
 
    let { goHome } = $props();
+
+   // ── Selección local / remoto ─────────────────────────────────────────────────
+   // Mismo patrón que TranscribeView.svelte: se pregunta cada vez que se
+   // entra a la vista (no se persiste), y bloquea el resto del formulario
+   // hasta elegir — así no hace falta lidiar con "cambiaste de modo a
+   // mitad de carga" en ningún otro lado.
+   let mode = $state(null); // null | "local" | "remote"
+   let checkingRemote = $state(false);
+   let remoteError = $state("");
+   let remoteInfo = $state(null); // { host, port, models, state, busy_model }
 
    // ── Estado ───────────────────────────────────────────────────────────────────
 
@@ -42,15 +54,15 @@
    let temperature = $state(0.3);
 
    // ── Cargar configuración guardada ────────────────────────────────────────────
+   // selectedModel/nGpuLayers/nCtx/temperature se guardan aparte, por modo
+   // (translate_srt_local_config / translate_srt_remote_config) — los
+   // valores pensados para la GPU de esta PC no tienen por qué servir
+   // para la del mediador, y viceversa (ver selectLocal/selectRemote).
 
    $effect(() => {
       const saved = persistentConfig.get("translate_srt_config");
       if (saved) {
          selectedLanguage = saved.selectedLanguage ?? "";
-         selectedModel = saved.selectedModel ?? "";
-         nGpuLayers = saved.nGpuLayers ?? 20;
-         nCtx = saved.nCtx ?? 4096;
-         temperature = saved.temperature ?? 0.3;
          outputSubfolder = saved.outputSubfolder ?? "english";
       }
    });
@@ -60,21 +72,20 @@
    $effect(() => {
       persistentConfig.set("translate_srt_config", {
          selectedLanguage,
-         selectedModel,
-         nGpuLayers,
-         nCtx,
-         temperature,
          outputSubfolder,
       });
    });
 
-   // ── Carga inicial ────────────────────────────────────────────────────────────
+   $effect(() => {
+      if (!mode) return;
+      const key = mode === "local" ? "translate_srt_local_config" : "translate_srt_remote_config";
+      persistentConfig.set(key, { selectedModel, nGpuLayers, nCtx, temperature });
+   });
+
+   // ── Carga inicial (idioma/prompt/glossary — independiente del modo) ─────────
 
    $effect(() => {
       (async () => {
-         models = await bridge.list_translation_models();
-         if (models.length && !selectedModel) selectedModel = models[0];
-
          languages = await bridge.list_prompt_languages();
          if (languages.length && !selectedLanguage) {
             selectedLanguage = languages.includes("japanese") ? "japanese" : languages[0];
@@ -85,6 +96,56 @@
          }
       })();
    });
+
+   // ── Selección local / remoto ─────────────────────────────────────────────────
+
+   async function selectLocal() {
+      mode = "local";
+      const saved = persistentConfig.get("translate_srt_local_config");
+      nGpuLayers = saved?.nGpuLayers ?? 20;
+      nCtx = saved?.nCtx ?? 4096;
+      temperature = saved?.temperature ?? 0.3;
+      models = await bridge.list_translation_models();
+      selectedModel =
+         saved?.selectedModel && models.includes(saved.selectedModel)
+            ? saved.selectedModel
+            : (models[0] ?? "");
+   }
+
+   async function selectRemote() {
+      checkingRemote = true;
+      remoteError = "";
+      const result = await bridge.check_remote_translation_server();
+      checkingRemote = false;
+
+      if (!result.found) {
+         remoteError = "No se encontró el server mediador en la red. ¿Está prendido?";
+         return;
+      }
+      if (result.state === "busy" || result.state === "loading") {
+         remoteError = `El mediador está ocupado en este momento (modelo: ${
+            result.busy_model ?? "desconocido"
+         }). Probá de nuevo en un rato.`;
+         return;
+      }
+
+      remoteInfo = result;
+      const saved = persistentConfig.get("translate_srt_remote_config");
+      nGpuLayers = saved?.nGpuLayers ?? 0;
+      nCtx = saved?.nCtx ?? 4096;
+      temperature = saved?.temperature ?? 0.3;
+      models = result.models;
+      selectedModel =
+         saved?.selectedModel && models.includes(saved.selectedModel)
+            ? saved.selectedModel
+            : (models[0] ?? "");
+      mode = "remote";
+   }
+
+   function changeMode() {
+      mode = null;
+      remoteError = "";
+   }
 
    // ── Derivados ────────────────────────────────────────────────────────────────
 
@@ -175,6 +236,8 @@
          nCtx,
          temperature,
          selectedLanguage,
+         mode === "remote" ? remoteInfo.host : null,
+         mode === "remote" ? remoteInfo.port : null,
       );
    }
 
@@ -347,14 +410,79 @@
    </div>
 {/if}
 
-{#if processing}
-   <TranslateProcessingView {goHome} {fileInfos} {outputPath} onCancel={cancel} onBack={goBack} />
-{:else}
+{#if mode === null}
    <div class="flex h-full flex-col">
       <ViewHeader title="Translate" {goHome} />
 
+      <main class="flex flex-1 items-center justify-center px-8">
+         <div class="flex w-full max-w-2xl items-stretch gap-6">
+            <!-- Remoto -->
+            <div class="flex flex-1 flex-col gap-2">
+               <button
+                  class="group flex flex-1 flex-col items-center justify-center gap-3
+                     rounded-2xl border border-white/10 bg-white/5 p-8 text-center
+                     transition-all duration-200 hover:border-white/20 hover:bg-white/10
+                     hover:scale-[1.02] active:scale-[0.98] cursor-pointer
+                     disabled:cursor-wait disabled:opacity-60 disabled:hover:scale-100"
+                  onclick={selectRemote}
+                  disabled={checkingRemote}
+               >
+                  {#if checkingRemote}
+                     <Spinner size={28} />
+                     <span class="text-xs text-white/40">Buscando mediador en la red...</span>
+                  {:else}
+                     <span class="text-3xl">🌐</span>
+                     <span class="text-sm font-semibold text-white tracking-wide">
+                        Traducir en remoto
+                     </span>
+                     <span class="text-xs text-white/50 leading-relaxed">
+                        Usa el server mediador de la red para traducir sin cargar
+                        el modelo en esta PC.
+                     </span>
+                  {/if}
+               </button>
+               {#if remoteError}
+                  <span class="text-xs text-yellow-400 text-center">{remoteError}</span>
+               {/if}
+            </div>
+
+            <!-- Separador vertical -->
+            <div class="w-px self-stretch bg-white/10"></div>
+
+            <!-- Local -->
+            <button
+               class="group flex flex-1 flex-col items-center justify-center gap-3
+                  rounded-2xl border border-white/10 bg-white/5 p-8 text-center
+                  transition-all duration-200 hover:border-white/20 hover:bg-white/10
+                  hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+               onclick={selectLocal}
+            >
+               <span class="text-3xl">💻</span>
+               <span class="text-sm font-semibold text-white tracking-wide">
+                  Traducir en esta PC
+               </span>
+               <span class="text-xs text-white/50 leading-relaxed">
+                  Carga el modelo localmente, como siempre.
+               </span>
+            </button>
+         </div>
+      </main>
+   </div>
+{:else if processing}
+   <TranslateProcessingView {goHome} {fileInfos} {outputPath} onCancel={cancel} onBack={goBack} />
+{:else}
+   <div class="flex h-full flex-col">
+      <ViewHeader title={mode === "remote" ? "Translate (remoto)" : "Translate"} {goHome} />
+
       <main class="flex flex-1 flex-col items-center overflow-y-auto px-8 py-10">
          <div class="flex w-full max-w-md flex-col gap-5">
+            <button
+               class="self-start text-xs text-white/30 hover:text-white transition-colors"
+               onclick={changeMode}
+            >
+               ← Cambiar modo (local/remoto)
+            </button>
+
             <!-- Carpeta base -->
             <BaseFolderPicker onPick={loadSrt} />
 
@@ -450,12 +578,19 @@
                      text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
                >
                   {#if !models.length}
-                     <option value="">Sin modelos en /models</option>
+                     <option value="">
+                        {mode === "remote" ? "Sin modelos en el mediador" : "Sin modelos en /models"}
+                     </option>
                   {/if}
                   {#each models as m (m)}
                      <option value={m}>{m}</option>
                   {/each}
                </select>
+               {#if mode === "remote" && !models.length}
+                  <span class="text-xs text-yellow-400">
+                     Este mediador no tiene ningún .gguf copiado en translation_models/ todavía.
+                  </span>
+               {/if}
             </div>
 
             <!-- Parámetros -->
@@ -530,3 +665,4 @@
       </main>
    </div>
 {/if}
+

@@ -1,3 +1,4 @@
+
 <script>
    import { bridge } from "$lib/stores/bridge.svelte.js";
    import { progress } from "$lib/stores/progress.svelte.js";
@@ -484,3 +485,4 @@ $effect(() => {
       </main>
    </div>
 {/if}
+

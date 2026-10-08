@@ -1,3 +1,4 @@
+
 /**
  * Almacenamiento persistente en localStorage para configuraciones de usuario.
  * Cada clave guarda un objeto JSON.
@@ -20,3 +21,4 @@ export const persistentConfig = {
     }
   }
 }
+

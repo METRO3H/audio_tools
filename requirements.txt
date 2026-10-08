@@ -1,9 +1,10 @@
-# requirements.txt
+
+# audio_tools no tenía un requirements.txt — este es nuevo, pensado
+# para arrancar con lo mínimo que necesita el módulo cliente del
+# mediador remoto (core/network/). Sumale acá lo que ya tengas resuelto
+# de otra forma (faster-whisper, llama-cpp-python, pywebview, etc.) si
+# querés que este archivo refleje el proyecto completo.
+
 requests>=2.31
 websocket-client>=1.7
-pywebview
-faster-whisper
-llama-cpp-python
-lingua-language-detector
-langid
-Pillow
+

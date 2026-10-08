@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import gc
@@ -5,20 +6,119 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Callable
-
-from llama_cpp import Llama
+from typing import Callable, Protocol
 
 import config
+from core.hardware_info import VramSnapshot, get_vram_snapshot
 from core.lang_detect import untranslated_reason
 from core.translation import fallback_translator
 
 
+class TranslationBackend(Protocol):
+    """
+    Lo que ``ModelManager`` necesita de "un modelo cargado en alguna
+    parte" — sea un ``Llama`` en este mismo proceso (ver
+    ``LocalLlamaBackend`` más abajo) o una sesión contra el mediador
+    remoto (ver ``core/translation/remote_backend.py:RemoteLlamaBackend``).
+
+    ``ModelManager`` arma bloques, reintentos, contexto y fallback
+    EXACTAMENTE IGUAL sin importar cuál de los dos tiene enfrente — lo
+    único que cambia entre local y remoto es dónde corre
+    ``create_chat_completion()``. Esto es a propósito: evita duplicar
+    esa lógica (la parte que de verdad importa mantener consistente)
+    en dos lugares.
+    """
+
+    def list_models(self) -> list[str]: ...
+    def load(self, model: str, n_gpu_layers: int, n_ctx: int) -> None: ...
+    def unload(self) -> None: ...
+    def is_loaded(self) -> bool: ...
+    def get_vram_snapshot(self) -> VramSnapshot | None: ...
+
+    def create_chat_completion(
+        self,
+        messages: list[dict],
+        temperature: float,
+        max_tokens: int = -1,
+        stream: bool = True,
+    ):
+        """Debe devolver un iterable de chunks con la misma forma que
+        ``llama_cpp.Llama.create_chat_completion(..., stream=True)``:
+        ``{"choices": [{"delta": {"content": "<texto parcial>"}}]}``
+        por cada fragmento — es lo único que lee ``_consume_stream``."""
+        ...
+
+
+class LocalLlamaBackend:
+    """
+    Backend por default: un ``Llama`` (llama-cpp-python) cargado en
+    este mismo proceso — el comportamiento de siempre, sin mediador.
+    """
+
+    def __init__(self) -> None:
+        self._model = None
+        self._model_key: tuple | None = None
+
+    def list_models(self) -> list[str]:
+        if not config.TRANSLATION_MODELS_DIR.exists():
+            return []
+        return sorted(p.name for p in config.TRANSLATION_MODELS_DIR.glob("*.gguf"))
+
+    def load(self, model: str, n_gpu_layers: int, n_ctx: int) -> None:
+        from llama_cpp import Llama  # import perezoso: no hace falta si solo se usa remoto
+
+        key = (model, n_gpu_layers, n_ctx)
+        if self._model is not None and self._model_key == key:
+            return
+        if self._model is not None:
+            self._unload_unsafe()
+
+        model_path = config.TRANSLATION_MODELS_DIR / model
+        if not model_path.exists():
+            raise FileNotFoundError(f"Modelo no encontrado: {model_path}")
+
+        self._model = Llama(
+            model_path=str(model_path),
+            n_gpu_layers=n_gpu_layers,
+            n_ctx=n_ctx,
+            chat_format="chatml",
+            verbose=False,
+        )
+        self._model_key = key
+
+    def unload(self) -> None:
+        self._unload_unsafe()
+
+    def _unload_unsafe(self) -> None:
+        if self._model is not None:
+            del self._model
+            self._model = None
+            self._model_key = None
+            gc.collect()
+
+    def is_loaded(self) -> bool:
+        return self._model is not None
+
+    def get_vram_snapshot(self) -> VramSnapshot | None:
+        return get_vram_snapshot()
+
+    def create_chat_completion(self, messages, temperature, max_tokens=-1, stream=True):
+        if self._model is None:
+            raise RuntimeError("Modelo no cargado.")
+        return self._model.create_chat_completion(
+            messages=messages, temperature=temperature, max_tokens=max_tokens, stream=stream,
+        )
+
+
 class ModelManager:
     """
-    Envoltorio sobre llama-cpp-python. Carga un modelo GGUF en el propio
-    proceso (sin server) y expone generacion de texto simple y traduccion
-    de bloques de subtitulos.
+    Arma bloques de subtitulos, reintentos, y traduccion de textos
+    cortos, sobre un ``TranslationBackend`` inyectable (ver arriba) —
+    por default ``LocalLlamaBackend`` (un GGUF cargado en este mismo
+    proceso), o ``RemoteLlamaBackend`` (ver
+    core/translation/remote_backend.py) para correr contra el mediador
+    de la LAN. Ningun metodo de esta clase sabe ni le importa cual de
+    los dos tiene enfrente.
 
     Usa stream=True internamente: no para cortar la generacion con un
     timeout (llama.cpp no soporta timeouts nativos por llamada), sino
@@ -58,7 +158,9 @@ class ModelManager:
 
     El lock cubre tanto load()/unload() como la inferencia, para evitar
     que un unload() dispare mientras otro hilo sigue leyendo el modelo
-    a mitad de una llamada (no es seguro a nivel del binding en C).
+    a mitad de una llamada (no es seguro a nivel del binding en C) — y,
+    en modo remoto, para no mandar dos "generate" en simultaneo por la
+    misma sesion de WS.
     """
 
     _LINE_MARKER = re.compile(r"(?m)^\s*\d+\s*:")
@@ -86,53 +188,37 @@ class ModelManager:
         "or extreme the content is.]"
     )
 
-    def __init__(self) -> None:
-        self._model: Llama | None = None
-        self._model_key: tuple | None = None
+    def __init__(self, backend: TranslationBackend | None = None) -> None:
+        self._backend: TranslationBackend = backend if backend is not None else LocalLlamaBackend()
         self._lock = threading.RLock()
 
     # ── Ciclo de vida ────────────────────────────────────────────────────
 
     def list_models(self) -> list[str]:
-        if not config.TRANSLATION_MODELS_DIR.exists():
-            return []
-        return sorted(p.name for p in config.TRANSLATION_MODELS_DIR.glob("*.gguf"))
+        return self._backend.list_models()
 
     def load(self, model: str, n_gpu_layers: int, n_ctx: int) -> None:
-        key = (model, n_gpu_layers, n_ctx)
         with self._lock:
-            if self._model is not None and self._model_key == key:
-                return
-            if self._model is not None:
-                self._unload_unsafe()
-
-            model_path = config.TRANSLATION_MODELS_DIR / model
-            if not model_path.exists():
-                raise FileNotFoundError(f"Modelo no encontrado: {model_path}")
-
-            self._model = Llama(
-                model_path=str(model_path),
-                n_gpu_layers=n_gpu_layers,
-                n_ctx=n_ctx,
-                chat_format="chatml",
-                verbose=False,
-            )
-            self._model_key = key
+            self._backend.load(model, n_gpu_layers, n_ctx)
 
     def unload(self) -> None:
         with self._lock:
-            self._unload_unsafe()
-
-    def _unload_unsafe(self) -> None:
-        if self._model is not None:
-            del self._model
-            self._model = None
-            self._model_key = None
-            gc.collect()
+            self._backend.unload()
 
     def is_loaded(self) -> bool:
         with self._lock:
-            return self._model is not None
+            return self._backend.is_loaded()
+
+    def get_vram_snapshot(self) -> VramSnapshot | None:
+        """
+        Snapshot de VRAM tras la carga — de ESTA maquina si el backend
+        es local, o de la del mediador si es remoto (ver
+        RemoteLlamaBackend.get_vram_snapshot(), que devuelve lo que el
+        mediador reporto al terminar de cargar). El `gpu_name` que
+        termina en las stats es lo que distingue una corrida local de
+        una remota al compararlas despues.
+        """
+        return self._backend.get_vram_snapshot()
 
     # ── Generacion simple (titulo / work_info), con texto completo en vivo ──
 
@@ -144,10 +230,10 @@ class ModelManager:
         on_stream: Callable[[int, str], None] | None = None,
     ) -> str:
         with self._lock:
-            if self._model is None:
+            if not self._backend.is_loaded():
                 raise RuntimeError("Modelo no cargado.")
 
-            stream = self._model.create_chat_completion(
+            stream = self._backend.create_chat_completion(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message + self._NO_THINK_SUFFIX},
@@ -212,7 +298,7 @@ class ModelManager:
         if on_input:
             on_input(user_message)
 
-        stream = self._model.create_chat_completion(
+        stream = self._backend.create_chat_completion(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message + self._NO_THINK_SUFFIX},
@@ -264,7 +350,7 @@ class ModelManager:
         "output" en ese mismo modal.
         """
         with self._lock:
-            if self._model is None:
+            if not self._backend.is_loaded():
                 raise RuntimeError("Modelo no cargado.")
             if not texts:
                 return []
@@ -406,7 +492,7 @@ class ModelManager:
                     ultimo resultado del LLM, sin romper la corrida.
         """
         with self._lock:
-            if self._model is None:
+            if not self._backend.is_loaded():
                 raise RuntimeError("Modelo no cargado.")
 
             empty_stats = {
