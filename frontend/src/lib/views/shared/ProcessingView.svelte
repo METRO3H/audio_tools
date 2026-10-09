@@ -1,19 +1,37 @@
-
 <script>
    import ViewHeader from "$lib/views/shared/ViewHeader.svelte";
    import ProgressBar from "$lib/components/ProgressBar.svelte";
    import FileInfoRow from "$lib/components/FileInfoRow.svelte";
    import LogsModal from "$lib/components/LogsModal.svelte";
+   import TranscribeFileLogsModal from "$lib/components/TranscribeFileLogsModal.svelte";
    import Spinner from "$lib/components/Spinner.svelte";
    import { bridge } from "$lib/stores/bridge.svelte.js";
    import { progress } from "$lib/stores/progress.svelte.js";
    import { formatElapsed } from "$lib/utils.js"; 
 
-   let { title, goHome, fileInfos = [], outputPath = null, onCancel, onBack, showOpenFile = true } = $props();
+   let {
+      title,
+      goHome,
+      fileInfos = [],
+      outputPath = null,
+      onCancel,
+      onBack,
+      showOpenFile = true,
+      enableFileLogs = false,
+      fileLogsByIndex = {},
+   } = $props();
 
-   // ── Logs modal ──────────────────────────────────────────────────────────────
+   // ── Logs modals ────────────────────────────────────────────────────────────
 
    let showLogs = $state(false);
+   let selectedFileIndex = $state(null);
+
+   function fileStatus(index) {
+      if (progress.success === true || index < progress.completed) return "Completado";
+      if (index === progress.fileIndex && progress.success === false) return "Finalizado con error";
+      if (progress.running && index === progress.fileIndex) return "Procesando";
+      return "En espera";
+   }
 
    // ── Progreso ────────────────────────────────────────────────────────────────
 
@@ -64,6 +82,15 @@
 
 {#if showLogs}
    <LogsModal logs={progress.logs} onClose={() => (showLogs = false)} />
+{/if}
+
+{#if enableFileLogs && selectedFileIndex !== null}
+   <TranscribeFileLogsModal
+      name={fileInfos[selectedFileIndex]?.name ?? `Archivo ${selectedFileIndex + 1}`}
+      logs={fileLogsByIndex[selectedFileIndex] ?? []}
+      status={fileStatus(selectedFileIndex)}
+      onClose={() => (selectedFileIndex = null)}
+   />
 {/if}
 
 <div class="flex h-full flex-col">
@@ -134,6 +161,7 @@
                   progress={fileProgress(i)}
                   active={isFileActive(i)}
                   done={isFileDone(i)}
+                  onRowClick={enableFileLogs ? () => (selectedFileIndex = i) : null}
                />
             {/each}
          </div>
@@ -174,4 +202,3 @@
       {/if}
    </main>
 </div>
-

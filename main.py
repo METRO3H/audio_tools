@@ -19,7 +19,7 @@ def main():
 
     api = AudioToolsAPI()
 
-    W, H = 960, 640
+    W, H = 1136, 900
     x, y = get_screen_center(W, H)
 
     window = webview.create_window(
@@ -28,7 +28,7 @@ def main():
         js_api    = api,
         width     = W,
         height    = H,
-        min_size  = (800, 560),
+        min_size  = (960, 640),
         resizable = True,
         frameless = False,
         x         = x,

@@ -1,26 +1,13 @@
-
 <script>
   /**
    * FileInfoRow.svelte
    * ───────────────────
    * Fila de archivo en la vista de procesamiento.
    * Muestra nombre, peso (si existe), duración y barra de progreso individual.
-   *
-   * Props:
-   *   name            string  — nombre del archivo
-   *   sizeMb          number  — peso en MB (0 o null = no mostrar)
-   *   duration        number  — duración del audio en segundos
-   *   progress        number  — 0..1 (null = en cola, 1 = completado)
-   *   active          boolean — si está siendo procesado ahora
-   *   done            boolean — si ya terminó
-   *   elapsedSeconds  number|null — tiempo de PROCESAMIENTO (no confundir
-   *                     con `duration`, que es la duración del audio). En
-   *                     vivo mientras `active`, congelado una vez `done`.
-   *                     null = no mostrar nada (tools que no lo mandan).
-   *   onRowClick      function|null — si se pasa, la fila se vuelve
-   *                     clickeable (cursor + hover). Pensado para abrir
-   *                     un modal de detalle (ej. el stream de un archivo).
+   * ...
    */
+
+  import Spinner from "$lib/components/Spinner.svelte"
 
   let {
     name,
@@ -61,7 +48,12 @@
 
   <!-- Fila superior: nombre, peso (opcional), duración -->
   <div class="flex items-center justify-between gap-4">
-    <span class="truncate text-xs font-medium text-white/80">{name}</span>
+    <div class="flex min-w-0 items-center gap-2">
+      {#if active && !done}
+        <Spinner size={12} duration="1.25s" />
+      {/if}
+      <span class="truncate text-xs font-medium text-white/80">{name}</span>
+    </div>
     <div class="flex shrink-0 items-center gap-3 text-xs text-white/30">
       {#if sizeMb > 0}
         <span>{sizeMb} MB</span>
@@ -94,4 +86,3 @@
   {/if}
 
 </div>
-

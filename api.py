@@ -1,4 +1,3 @@
-
 """
 api.py
 ------
@@ -534,6 +533,37 @@ class AudioToolsAPI:
         on_log, on_progress, on_file_start, _ = _make_sequential_callbacks(
             self._window, len(configs)
         )
+
+        base_on_log = on_log
+        base_on_file_start = on_file_start
+        current_file_index = {"value": None}
+
+        def on_log(message: str):
+            # Conserva los logs globales y, además, los asocia al archivo
+            # que se está procesando para mostrarlos en su modal en vivo.
+            base_on_log(message)
+
+            file_index = current_file_index["value"]
+            if file_index is None:
+                # Durante la preparación/subida aún puede no haber llegado
+                # el evento file_start. Si el mensaje menciona un archivo,
+                # lo asociamos a ese archivo; si no, al primero del lote.
+                file_index = next(
+                    (
+                        i for i, cfg in enumerate(configs)
+                        if cfg.input_file.name in message
+                    ),
+                    0,
+                )
+
+            _emit(self._window, "audiotools:transcribe:file_log", {
+                "file_index": file_index,
+                "message": message,
+            })
+
+        def on_file_start(index: int):
+            current_file_index["value"] = index
+            base_on_file_start(index)
 
         def on_file_done(i: int, segments: list):
             out_path = action.get_output_path(
