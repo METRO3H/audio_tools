@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import re
@@ -107,7 +106,7 @@ def save_glossary(language: str, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-# ── System prompts compartidos (fijos, sin idioma, no editables desde UI) ─
+# ── System prompts compartidos (sin idioma, editables desde la UI) ───────
 
 def get_shared_prompt(name: str) -> str:
     """name sin extension: 'title_translation' o 'work_info_extraction'."""
@@ -115,6 +114,14 @@ def get_shared_prompt(name: str) -> str:
         raise ValueError(f"shared prompt invalido: {name!r} (debe ser uno de {_SHARED_NAMES})")
     path = _shared_dir() / f"{name}.txt"
     return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+def save_shared_prompt(name: str, content: str) -> None:
+    """name sin extension: 'title_translation' o 'work_info_extraction'."""
+    if name not in _SHARED_NAMES:
+        raise ValueError(f"shared prompt invalido: {name!r} (debe ser uno de {_SHARED_NAMES})")
+    path = _shared_dir() / f"{name}.txt"
+    path.write_text(content, encoding="utf-8")
 
 
 # ── Construccion de prompts finales ───────────────────────────────────────
@@ -148,4 +155,3 @@ def build_short_text_prompt(base_prompt: str, glossary: str = "", work_info: str
     if work_info:
         parts.append(f"\n[Work info — context for this work]:\n{work_info.strip()}")
     return "\n".join(parts)
-

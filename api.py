@@ -1207,6 +1207,15 @@ class AudioToolsAPI:
     def save_glossary(self, language: str, content: str) -> None:
         translation_prompts.save_glossary(language, content)
 
+    # NUEVOS — prompt compartido (work_info_extraction / title_translation).
+    # A diferencia de los prompts por idioma, estos son únicos para todo el
+    # proyecto y los usan las tres tools de traducción.
+    def get_shared_prompt(self, name: str) -> str:
+        return translation_prompts.get_shared_prompt(name)
+
+    def save_shared_prompt(self, name: str, content: str) -> None:
+        translation_prompts.save_shared_prompt(name, content)
+
     def open_directory(self, path: str) -> None:
         """Abre la carpeta con el explorador de archivos del sistema."""
 

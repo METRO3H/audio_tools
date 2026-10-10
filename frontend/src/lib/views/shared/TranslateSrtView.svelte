@@ -1,4 +1,3 @@
-
 <script>
    import { bridge } from "$lib/stores/bridge.svelte.js";
    import { progress } from "$lib/stores/progress.svelte.js";
@@ -33,6 +32,13 @@
    let rawTitle = $state("");
    let rawPublisherInfo = $state("");
    let showTitleInfoModal = $state(false);
+   let modalTab = $state("info"); // "info" | "prompt"
+
+   // Prompt compartido de extracción de work info — se lee del backend
+   // (core/translation/prompts/shared/work_info_extraction.txt) y es
+   // editable/guardable desde la tab "Prompt extractor" del modal.
+   let workInfoPrompt = $state("");
+   let workInfoPromptDirty = $state(false);
 
    let languages = $state([]); // ["japanese", "chinese", ...] — carpetas de prompts/
    let selectedLanguage = $state("");
@@ -94,6 +100,10 @@
             promptDirty = false;
             glossaryDirty = false;
          }
+         // El prompt de extracción es compartido entre todos los idiomas,
+         // así que se carga una sola vez, sin depender de selectedLanguage.
+         workInfoPrompt = await bridge.get_shared_prompt("work_info_extraction");
+         workInfoPromptDirty = false;
       })();
    });
 
@@ -215,6 +225,23 @@
       glossaryDirty = false;
    }
 
+   // Prompt compartido de work_info_extraction — no depende del idioma.
+   function onWorkInfoPromptEdit() {
+      workInfoPromptDirty = true;
+   }
+
+   async function saveWorkInfoPrompt() {
+      await bridge.save_shared_prompt("work_info_extraction", workInfoPrompt);
+      workInfoPromptDirty = false;
+   }
+
+   // Resetea la tab activa cada vez que se abre el modal, para que siempre
+   // arranque en "Info" (la de uso más frecuente).
+   function openTitleInfoModal() {
+      modalTab = "info";
+      showTitleInfoModal = true;
+   }
+
    // ── Ejecutar ─────────────────────────────────────────────────────────────────
 
    async function run() {
@@ -259,46 +286,106 @@
    ></div>
    <div class="fixed inset-0 z-50 flex items-center justify-center p-6">
       <div
-         class="w-full max-w-xl max-h-[85vh] overflow-y-auto rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4"
+         class="w-full max-w-2xl h-[85vh] rounded-2xl border border-white/10 bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4"
       >
-         <div class="flex items-center justify-between">
+         <!-- Header -->
+         <div class="flex items-center justify-between shrink-0">
             <h2 class="text-sm font-semibold text-white">Título / info del publisher</h2>
             <button
-               class="text-white/30 hover:text-white transition-colors"
+               class="text-white/30 hover:text-white transition-colors cursor-pointer"
                onclick={() => (showTitleInfoModal = false)}
             >
                ✕
             </button>
          </div>
 
-         <div class="flex flex-col gap-1.5">
-            <label class="text-xs text-white/40" for="title">Título original</label>
-            <input
-               id="title"
-               type="text"
-               bind:value={rawTitle}
-               placeholder="Título en el idioma original"
-               class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2
-                  text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
-            />
+         <!-- Tabs -->
+         <div class="flex gap-1 shrink-0 border-b border-white/5">
+            <button
+               class="px-3 py-1.5 text-xs transition-colors cursor-pointer
+                  {modalTab === 'info'
+                     ? 'text-white border-b-2 border-indigo-500'
+                     : 'text-white/40 hover:text-white/70'}"
+               onclick={() => (modalTab = 'info')}
+            >
+               Info
+            </button>
+            <button
+               class="px-3 py-1.5 text-xs transition-colors cursor-pointer
+                  {modalTab === 'prompt'
+                     ? 'text-white border-b-2 border-indigo-500'
+                     : 'text-white/40 hover:text-white/70'}"
+               onclick={() => (modalTab = 'prompt')}
+            >
+               Prompt extractor{workInfoPromptDirty ? " ·" : ""}
+            </button>
          </div>
 
-         <div class="flex flex-1 flex-col gap-1.5">
-            <label class="text-xs text-white/40" for="pubInfo">Info del publisher</label>
-            <textarea
-               id="pubInfo"
-               bind:value={rawPublisherInfo}
-               rows="16"
-               placeholder="Pega la descripción / ficha del trabajo"
-               class="w-full resize-y rounded-lg border border-white/10 bg-white/5 px-3 py-2
-                  text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
-            ></textarea>
+         <!-- Contenido de la tab activa -->
+         <div class="flex-1 min-h-0 overflow-hidden">
+            {#if modalTab === 'info'}
+               <div class="flex h-full flex-col gap-4">
+                  <div class="flex flex-col gap-1.5 shrink-0">
+                     <label class="text-xs text-white/40" for="title">Título original</label>
+                     <input
+                        id="title"
+                        type="text"
+                        bind:value={rawTitle}
+                        placeholder="Título en el idioma original"
+                        class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2
+                           text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
+                     />
+                  </div>
+
+                  <div class="flex flex-1 min-h-0 flex-col gap-1.5">
+                     <label class="text-xs text-white/40" for="pubInfo">Info del publisher</label>
+                     <textarea
+                        id="pubInfo"
+                        bind:value={rawPublisherInfo}
+                        placeholder="Pega la descripción / ficha del trabajo"
+                        class="flex-1 min-h-0 resize-none rounded-lg border border-white/10 bg-white/5 px-3 py-2
+                           text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
+                        style="scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;"
+                     ></textarea>
+                  </div>
+               </div>
+            {:else}
+               <div class="flex h-full flex-col gap-3">
+                  <div class="flex items-center justify-between gap-3 shrink-0">
+                     <p class="text-[11px] text-white/35 leading-relaxed">
+                        System prompt que se le manda al modelo para extraer la work info
+                        (speakers, tono, sinopsis, glossary...) a partir del texto de arriba.
+                        Es compartido entre todos los idiomas y afecta a las tres tools de traducción.
+                     </p>
+                     <button
+                        class="shrink-0 rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-xs
+                           text-white/40 hover:text-white/80 transition-colors cursor-pointer
+                           disabled:opacity-30 disabled:cursor-not-allowed"
+                        onclick={saveWorkInfoPrompt}
+                        disabled={!workInfoPromptDirty}
+                        title="Guardar prompt"
+                     >
+                        {workInfoPromptDirty ? "Guardar" : "Guardado"}
+                     </button>
+                  </div>
+
+                  <textarea
+                     bind:value={workInfoPrompt}
+                     oninput={onWorkInfoPromptEdit}
+                     spellcheck="false"
+                     class="flex-1 min-h-0 resize-none rounded-lg border border-white/10 bg-white/5 px-3 py-2
+                        text-xs text-white/80 outline-none focus:border-indigo-500/50 transition-colors font-mono"
+                     style="scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;"
+                  ></textarea>
+               </div>
+            {/if}
          </div>
 
-         <div class="flex justify-end">
+         <!-- Footer -->
+         <div class="flex justify-end shrink-0 border-t border-white/5 pt-3">
             <button
                class="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-medium
-                  text-white hover:bg-indigo-500 transition-colors"
+                  text-white hover:bg-indigo-500 transition-colors cursor-pointer"
                onclick={() => (showTitleInfoModal = false)}
             >
                Listo
@@ -322,7 +409,7 @@
             <h2 class="text-sm font-semibold text-white">
                Prompt {promptDirty ? "· sin guardar" : ""}
             </h2>
-            <button class="text-white/30 hover:text-white transition-colors" onclick={() => (showPromptModal = false)}>
+            <button class="text-white/30 hover:text-white transition-colors cursor-pointer" onclick={() => (showPromptModal = false)}>
                ✕
             </button>
          </div>
@@ -332,14 +419,14 @@
                value={selectedLanguage}
                onchange={(e) => onSelectLanguage(e.target.value)}
                class="flex-1 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5
-                  text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
+                  text-xs text-white outline-none focus:border-indigo-500/50 transition-colors cursor-pointer"
             >
                {#each languages as lang (lang)}
                   <option value={lang}>{languageLabel(lang)}</option>
                {/each}
             </select>
             <button
-               class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10"
+               class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10 cursor-pointer"
                onclick={savePrompt}
                title="Guardar"
             >
@@ -371,7 +458,7 @@
             <h2 class="text-sm font-semibold text-white">
                Glossary {glossaryDirty ? "· sin guardar" : ""}
             </h2>
-            <button class="text-white/30 hover:text-white transition-colors" onclick={() => (showGlossaryModal = false)}>
+            <button class="text-white/30 hover:text-white transition-colors cursor-pointer" onclick={() => (showGlossaryModal = false)}>
                ✕
             </button>
          </div>
@@ -385,14 +472,14 @@
                value={selectedLanguage}
                onchange={(e) => onSelectLanguage(e.target.value)}
                class="flex-1 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5
-                  text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
+                  text-xs text-white outline-none focus:border-indigo-500/50 transition-colors cursor-pointer"
             >
                {#each languages as lang (lang)}
                   <option value={lang}>{languageLabel(lang)}</option>
                {/each}
             </select>
             <button
-               class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10"
+               class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10 cursor-pointer"
                onclick={saveGlossary}
                title="Guardar"
             >
@@ -477,7 +564,7 @@
       <main class="flex flex-1 flex-col items-center overflow-y-auto px-8 py-10">
          <div class="flex w-full max-w-md flex-col gap-5">
             <button
-               class="self-start text-xs text-white/30 hover:text-white transition-colors"
+               class="self-start text-xs text-white/30 hover:text-white transition-colors cursor-pointer"
                onclick={changeMode}
             >
                ← Cambiar modo (local/remoto)
@@ -495,7 +582,7 @@
                         <span class="text-white/20">({fileInfos.length})</span>
                      {/if}
                   </span>
-                  <button class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors" onclick={pickFiles}>
+                  <button class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer" onclick={pickFiles}>
                      Seleccionar manualmente
                   </button>
                </div>
@@ -516,7 +603,7 @@
                            <span class="truncate">{file.name}</span>
                            <div class="flex shrink-0 items-center gap-2 ml-2">
                               <button
-                                 class="text-white/20 hover:text-red-400 transition-colors"
+                                 class="text-white/20 hover:text-red-400 transition-colors cursor-pointer"
                                  onclick={() => removeFile(file.path)}>✕</button
                               >
                            </div>
@@ -533,61 +620,13 @@
                {/if}
             </div>
 
-            <!-- Título/info del publisher + Prompt + Glossary — misma fila -->
-            <!-- Prompt + Glossary + Título/info — misma fila.
-                 Título/info es opcional, por eso va último y con indicador
-                 claro de si tiene contenido cargado. -->
-            <div class="grid grid-cols-3 gap-2">
-               <button
-                  class="flex items-center justify-between rounded-lg border border-white/10
-                     bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20 cursor-pointer"
-                  onclick={() => (showPromptModal = true)}
-               >
-                  <span class="text-white/60 truncate">Prompt</span>
-                  <span class="text-white/30 shrink-0 ml-2 truncate">
-                     {languageLabel(selectedLanguage)}{promptDirty ? " ·" : ""}
-                  </span>
-               </button>
-
-               <button
-                  class="flex items-center justify-between rounded-lg border border-white/10
-                     bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20 cursor-pointer"
-                  onclick={() => (showGlossaryModal = true)}
-               >
-                  <span class="text-white/60 truncate">Glossary</span>
-                  <span class="text-white/30 shrink-0 ml-2 truncate">
-                     {languageLabel(selectedLanguage)}{glossaryDirty ? " ·" : ""}
-                  </span>
-               </button>
-
-               <!-- Título/info: opcional. El borde y el fondo se tiñen de
-                    esmeralda + aparece un ✓ cuando hay contenido cargado,
-                    así se ve de un vistazo si el usuario lo completó o no. -->
-               <button
-                  class="flex items-center justify-between rounded-lg border px-3 py-2 text-xs text-left transition-all cursor-pointer
-                     {hasTitleOrInfo
-                        ? 'border-emerald-500/30 bg-emerald-500/5 hover:border-emerald-500/50'
-                        : 'border-white/10 bg-white/5 hover:border-white/20'}"
-                  onclick={() => (showTitleInfoModal = true)}
-               >
-                  <span class="{hasTitleOrInfo ? 'text-white/80' : 'text-white/60'} truncate">
-                     Título/info
-                  </span>
-                  {#if hasTitleOrInfo}
-                     <span class="shrink-0 ml-2 text-emerald-400 text-xs font-medium">✓</span>
-                  {:else}
-                     <span class="shrink-0 ml-2 text-white/20 text-xs">—</span>
-                  {/if}
-               </button>
-            </div>
-
             <!-- Modelo -->
             <div class="flex flex-col gap-1.5">
                <span class="text-xs text-white/40">Modelo</span>
                <select
                   bind:value={selectedModel}
                   class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2
-                     text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
+                     text-xs text-white outline-none focus:border-indigo-500/50 transition-colors cursor-pointer"
                >
                   {#if !models.length}
                      <option value="">
@@ -645,6 +684,53 @@
                </div>
             </div>
 
+            <!-- Prompt + Glossary + Título/info — misma fila.
+                 Título/info es opcional, por eso va último y con indicador
+                 claro de si tiene contenido cargado. -->
+            <div class="grid grid-cols-3 gap-2">
+               <button
+                  class="flex items-center justify-between rounded-lg border border-white/10
+                     bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20 cursor-pointer"
+                  onclick={() => (showPromptModal = true)}
+               >
+                  <span class="text-white/60 truncate">Prompt</span>
+                  <span class="text-white/30 shrink-0 ml-2 truncate">
+                     {languageLabel(selectedLanguage)}{promptDirty ? " ·" : ""}
+                  </span>
+               </button>
+
+               <button
+                  class="flex items-center justify-between rounded-lg border border-white/10
+                     bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20 cursor-pointer"
+                  onclick={() => (showGlossaryModal = true)}
+               >
+                  <span class="text-white/60 truncate">Glossary</span>
+                  <span class="text-white/30 shrink-0 ml-2 truncate">
+                     {languageLabel(selectedLanguage)}{glossaryDirty ? " ·" : ""}
+                  </span>
+               </button>
+
+               <!-- Título/info: opcional. El borde y el fondo se tiñen de
+                    esmeralda + aparece un ✓ cuando hay contenido cargado,
+                    así se ve de un vistazo si el usuario lo completó o no. -->
+               <button
+                  class="flex items-center justify-between rounded-lg border px-3 py-2 text-xs text-left transition-all cursor-pointer
+                     {hasTitleOrInfo
+                        ? 'border-emerald-500/30 bg-emerald-500/5 hover:border-emerald-500/50'
+                        : 'border-white/10 bg-white/5 hover:border-white/20'}"
+                  onclick={openTitleInfoModal}
+               >
+                  <span class="{hasTitleOrInfo ? 'text-white/80' : 'text-white/60'} truncate">
+                     Título/info
+                  </span>
+                  {#if hasTitleOrInfo}
+                     <span class="shrink-0 ml-2 text-emerald-400 text-xs font-medium">✓</span>
+                  {:else}
+                     <span class="shrink-0 ml-2 text-white/20 text-xs">—</span>
+                  {/if}
+               </button>
+            </div>
+
             <!-- Carpeta de salida -->
             <div class="flex flex-col gap-1.5">
                <label class="text-xs text-white/40" for="outSub">Subcarpeta de salida</label>
@@ -666,7 +752,7 @@
             <!-- Botón -->
             <button
                class="w-full rounded-lg bg-indigo-600 py-2.5 text-sm font-medium
-                 text-white transition-colors hover:bg-indigo-500
+                 text-white transition-colors hover:bg-indigo-500 cursor-pointer
                  disabled:opacity-30 disabled:cursor-not-allowed"
                onclick={run}
                disabled={!canRun}
@@ -677,4 +763,3 @@
       </main>
    </div>
 {/if}
-
