@@ -1,4 +1,3 @@
-
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
@@ -14,10 +13,11 @@ ffmpeg/
 
 # ── Temporales del proyecto ───────────────────────────────────────────────────
 _concat_list.txt
+_merge_metadata.txt
+_chapters_translate_metadata.txt
 
-# ── Tests manuales ────────────────────────────────────────────────────────────
+# ── Tests manuales (scratch). La suite real vive en tests/ y SÍ se versiona ───
 test/
-test_*.py
 
 # ── ML models ─────────────────────────────────────────────────────────────────
 models/
@@ -46,7 +46,6 @@ desktop.ini
 
 # ── General ───────────────────────────────────────────────────────────────────
 *.log
-*.txt
 
 # ml models
 models/
@@ -70,3 +69,5 @@ frontend/static/**/*.webp
 frontend/public/**/*.svg
 frontend/src/**/*.svg
 
+
+core/translation/prompts/

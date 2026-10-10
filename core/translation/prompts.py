@@ -71,14 +71,19 @@ def _shared_dir() -> Path:
 
 def list_languages() -> list[str]:
     """
-    Idiomas = subcarpetas de prompts/, excepto "shared" (esa no es un
-    idioma, son los dos prompts de sistema compartidos por los tres tipos).
+    Idiomas = subcarpetas de prompts/ que tengan al menos un
+    "{kind}_translation.txt". Se excluye "shared" (no es un idioma, son los
+    dos prompts de sistema compartidos por los tres tipos) y cualquier
+    carpeta que no sea un idioma real (ej. "old/", que solo contiene
+    prompts de una versión anterior en subcarpetas).
     """
     if not _PROMPTS_DIR.exists():
         return []
     return sorted(
         p.name for p in _PROMPTS_DIR.iterdir()
-        if p.is_dir() and p.name != "shared"
+        if p.is_dir()
+        and p.name != "shared"
+        and any((p / f"{kind}_translation.txt").is_file() for kind in _KINDS)
     )
 
 

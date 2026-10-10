@@ -1,4 +1,3 @@
-
 <script>
    /**
     * HomeView.svelte
@@ -51,12 +50,6 @@
          icon: "📝",
       },
       {
-         id: "pipeline",
-         title: "Pipeline",
-         description: "Encadena herramientas y procésalas en secuencia.",
-         icon: "⚙️",
-      },
-      {
          id: "translate",
          title: "Translate",
          description: "Traduce subtítulos .srt con un LLM local.",
@@ -102,4 +95,3 @@
       </div>
    </main>
 </div>
-

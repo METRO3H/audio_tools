@@ -1,4 +1,3 @@
-
 <script>
    import { bridgeReady } from "$lib/stores/bridge.svelte.js";
    import { appConfig } from "$lib/stores/config.svelte.js";
@@ -10,7 +9,6 @@
    import DivergeView from "$lib/views/DivergeView.svelte";
    import AudioToVideoView from "$lib/views/AudioToVideoView.svelte";
    import TranscribeView from "$lib/views/TranscribeView.svelte";
-   import PipelineView from "$lib/views/PipelineView.svelte";
    import ConfirmModal from "$lib/components/ConfirmModal.svelte";
    import TranslateView from "$lib/views/TranslateView.svelte";
 
@@ -132,14 +130,9 @@
       {#key viewKey}
          <TranscribeView {goHome} />
       {/key}
-   {:else if currentView === "pipeline"}
-      {#key viewKey}
-         <PipelineView {goHome} />
-      {/key}
    {:else if currentView === "translate"}
       {#key viewKey}
          <TranslateView {goHome} />
       {/key}
    {/if}
 </div>
-
