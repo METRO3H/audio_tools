@@ -1,7 +1,16 @@
-
 {
   "compilerOptions": {
     "moduleResolution": "bundler",
+    "paths": {
+      "@app/*": ["./src/app/*"],
+      "@shared/*": ["./src/shared/*"],
+      "@home/*": ["./src/features/home/*"],
+      "@merge/*": ["./src/features/merge/*"],
+      "@diverge/*": ["./src/features/diverge/*"],
+      "@audio-to-video/*": ["./src/features/audio-to-video/*"],
+      "@transcribe/*": ["./src/features/transcribe/*"],
+      "@translate/*": ["./src/features/translate/*"]
+    },
     "target": "ESNext",
     "module": "ESNext",
     /**
@@ -32,4 +41,3 @@
    */
   "include": ["src/**/*.d.ts", "src/**/*.js", "src/**/*.svelte"]
 }
-
