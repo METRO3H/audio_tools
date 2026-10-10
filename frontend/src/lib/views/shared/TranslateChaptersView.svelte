@@ -1,4 +1,3 @@
-
 <script>
    import { bridge } from "$lib/stores/bridge.svelte.js";
    import { progress } from "$lib/stores/progress.svelte.js";
@@ -101,9 +100,7 @@
       temperature = saved?.temperature ?? 0.3;
       models = await bridge.list_translation_models();
       selectedModel =
-         saved?.selectedModel && models.includes(saved.selectedModel)
-            ? saved.selectedModel
-            : (models[0] ?? "");
+         saved?.selectedModel && models.includes(saved.selectedModel) ? saved.selectedModel : (models[0] ?? "");
    }
 
    async function selectRemote() {
@@ -130,9 +127,7 @@
       temperature = saved?.temperature ?? 0.3;
       models = result.models;
       selectedModel =
-         saved?.selectedModel && models.includes(saved.selectedModel)
-            ? saved.selectedModel
-            : (models[0] ?? "");
+         saved?.selectedModel && models.includes(saved.selectedModel) ? saved.selectedModel : (models[0] ?? "");
       mode = "remote";
    }
 
@@ -378,12 +373,9 @@
                      <span class="text-xs text-white/40">Buscando mediador en la red...</span>
                   {:else}
                      <span class="text-3xl">🌐</span>
-                     <span class="text-sm font-semibold text-white tracking-wide">
-                        Traducir en remoto
-                     </span>
+                     <span class="text-sm font-semibold text-white tracking-wide"> Traducir en remoto </span>
                      <span class="text-xs text-white/50 leading-relaxed">
-                        Usa el server mediador de la red para traducir sin cargar
-                        el modelo en esta PC.
+                        Usa el server mediador de la red para traducir sin cargar el modelo en esta PC.
                      </span>
                   {/if}
                </button>
@@ -404,218 +396,215 @@
                onclick={selectLocal}
             >
                <span class="text-3xl">💻</span>
-               <span class="text-sm font-semibold text-white tracking-wide">
-                  Traducir en esta PC
-               </span>
-               <span class="text-xs text-white/50 leading-relaxed">
-                  Carga el modelo localmente, como siempre.
-               </span>
+               <span class="text-sm font-semibold text-white tracking-wide"> Traducir en esta PC </span>
+               <span class="text-xs text-white/50 leading-relaxed"> Carga el modelo localmente, como siempre. </span>
             </button>
          </div>
       </main>
    </div>
 {:else}
-<div class="flex h-full flex-col">
-   <ViewHeader title={mode === "remote" ? "Translate — Chapters (remoto)" : "Translate — Chapters"} {goHome} />
+   <div class="flex h-full flex-col">
+      <ViewHeader title={mode === "remote" ? "Translate — Chapters (remoto)" : "Translate — Chapters"} {goHome} />
 
-   <main class="flex flex-1 flex-col items-center overflow-y-auto px-8 py-10">
-      <div class="flex w-full max-w-md flex-col gap-5">
-         {#if !processing && done === null}
-            <button
-               class="self-start text-xs text-white/30 hover:text-white transition-colors"
-               onclick={changeMode}
-            >
-               ← Cambiar modo (local/remoto)
-            </button>
+      <main class="flex flex-1 flex-col items-center overflow-y-auto px-8 py-10">
+         <div class="flex w-full max-w-md flex-col gap-5">
+            {#if !processing && done === null}
+               <button class="self-start text-xs text-white/30 hover:text-white transition-colors" onclick={changeMode}>
+                  ← Cambiar modo (local/remoto)
+               </button>
 
-            <!-- Archivo -->
-            <div class="flex flex-col gap-1.5">
-               <div class="flex items-center justify-between">
-                  <span class="text-xs text-white/40">Archivo</span>
-                  <button class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors" onclick={pickFile}>
-                     Seleccionar
-                  </button>
-               </div>
-               {#if fileInfo}
-                  <div class="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2">
-                     <span class="truncate text-xs text-white/70">{fileInfo.name}</span>
-                     <span class="text-xs text-white/30 shrink-0 ml-2">{chapters.length} chapters</span>
+               <!-- Archivo -->
+               <div class="flex flex-col gap-1.5">
+                  <div class="flex items-center justify-between">
+                     <span class="text-xs text-white/40">Archivo</span>
+                     <button class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors" onclick={pickFile}>
+                        Seleccionar
+                     </button>
                   </div>
-               {:else}
-                  <div class="rounded-lg border border-dashed border-white/10 p-4 text-center text-xs text-white/20">
-                     Selecciona un archivo con chapters embebidos
-                  </div>
-               {/if}
-            </div>
-
-            {#if chapters.length}
-               <ul class="flex flex-col gap-1 overflow-y-auto max-h-48">
-                  {#each chapters as ch (ch.index)}
-                     <li class="rounded-lg bg-white/5 px-3 py-1.5 text-xs text-white/60">
-                        [{ch.index}] {ch.title}
-                     </li>
-                  {/each}
-               </ul>
-            {:else if fileInfo}
-               <span class="text-xs text-yellow-400">⚠ Este archivo no tiene chapters embebidos</span>
-            {/if}
-
-            <!-- Info publisher + Prompt + Glossary en una fila -->
-            <div class="grid grid-cols-3 gap-2">
-               <button
-                  class="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20"
-                  onclick={() => (showInfoModal = true)}
-               >
-                  <span class="text-white/60 truncate">Info</span>
-                  <span class="{publisherInfo.trim() ? 'text-emerald-400' : 'text-white/30'} shrink-0 ml-2">
-                     {publisherInfo.trim() ? "✓" : "—"}
-                  </span>
-               </button>
-               <button
-                  class="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20"
-                  onclick={() => (showPromptModal = true)}
-               >
-                  <span class="text-white/60 truncate">Prompt</span>
-                  <span class="text-white/30 shrink-0 ml-2 truncate"
-                     >{languageLabel(selectedLanguage)}{promptDirty ? " ·" : ""}</span
-                  >
-               </button>
-               <button
-                  class="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20"
-                  onclick={() => (showGlossaryModal = true)}
-               >
-                  <span class="text-white/60 truncate">Glossary</span>
-                  <span class="text-white/30 shrink-0 ml-2 truncate"
-                     >{languageLabel(selectedLanguage)}{glossaryDirty ? " ·" : ""}</span
-                  >
-               </button>
-            </div>
-
-            <!-- Modelo -->
-            <div class="flex flex-col gap-1.5">
-               <span class="text-xs text-white/40">Modelo</span>
-               <select
-                  bind:value={selectedModel}
-                  class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
-               >
-                  {#if !models.length}
-                     <option value="">
-                        {mode === "remote" ? "Sin modelos en el mediador" : "Sin modelos en /models"}
-                     </option>
-                  {/if}
-                  {#each models as m (m)}<option value={m}>{m}</option>{/each}
-               </select>
-               {#if mode === "remote" && !models.length}
-                  <span class="text-xs text-yellow-400">
-                     Este mediador no tiene ningún .gguf copiado en translation_models/ todavía.
-                  </span>
-               {/if}
-            </div>
-
-            <!-- Parámetros -->
-            <div class="grid grid-cols-3 gap-3">
-               <div class="flex flex-col gap-1.5">
-                  <label class="text-[11px] text-white/40" for="gpuLayers">GPU layers</label>
-                  <input
-                     id="gpuLayers"
-                     type="number"
-                     bind:value={nGpuLayers}
-                     min="0"
-                     class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white text-center outline-none focus:border-indigo-500/50 transition-colors"
-                  />
-               </div>
-               <div class="flex flex-col gap-1.5">
-                  <label class="text-[11px] text-white/40" for="ctx">Contexto</label>
-                  <input
-                     id="ctx"
-                     type="number"
-                     bind:value={nCtx}
-                     min="512"
-                     step="512"
-                     class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white text-center outline-none focus:border-indigo-500/50 transition-colors"
-                  />
-               </div>
-               <div class="flex flex-col gap-1.5">
-                  <label class="text-[11px] text-white/40" for="temp">Temperatura</label>
-                  <input
-                     id="temp"
-                     type="number"
-                     bind:value={temperature}
-                     min="0"
-                     max="2"
-                     step="0.1"
-                     class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white text-center outline-none focus:border-indigo-500/50 transition-colors"
-                  />
-               </div>
-            </div>
-
-            {#if outputPath}
-               <span class="text-[11px] text-white/25 truncate">Salida: {outputPath}</span>
-            {/if}
-
-            <button
-               class="w-full rounded-lg bg-indigo-600 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed"
-               onclick={run}
-               disabled={!canRun}
-            >
-               Ejecutar traducción
-            </button>
-         {:else}
-            <!-- Progreso simple -->
-            <div class="flex items-center gap-3 rounded-lg border border-white/10 bg-white/5 px-4 py-3">
-               {#if processing}<Spinner size={14} duration="1.5s" />{/if}
-               <span class="text-sm text-white/80">
-                  {#if done === true}Completado ✓{:else if done === false}Falló / cancelado ✕{:else}{phaseText}{/if}
-               </span>
-            </div>
-
-            {#if workInfoText}
-               <div class="flex flex-col gap-1 rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-                  <span class="text-[11px] text-white/30">Work info</span>
-                  <p class="text-xs text-white/50 whitespace-pre-wrap max-h-40 overflow-y-auto">{workInfoText}</p>
-               </div>
-            {/if}
-
-            <div class="flex gap-2">
-               {#if processing}
-                  <button
-                     class="flex-1 rounded-lg border border-red-500/30 py-2 text-xs text-red-400 hover:bg-red-500/10 transition-colors"
-                     onclick={cancel}
-                  >
-                     Detener
-                  </button>
-               {/if}
-               <button
-                  class="flex-1 rounded-lg border border-white/10 py-2 text-xs text-white/60 hover:text-white transition-colors"
-                  onclick={() => (showLogs = true)}
-               >
-                  Ver logs
-               </button>
-            </div>
-
-            {#if done !== null && !processing}
-               <div class="flex gap-2">
-                  {#if done === true}
-                     <button
-                        class="flex-1 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-xs text-white/60 hover:text-white transition-colors"
-                        onclick={() => bridge.open_folder(outputPath)}
+                  {#if fileInfo}
+                     <div
+                        class="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2"
                      >
-                        Abrir carpeta
+                        <span class="truncate text-xs text-white/70">{fileInfo.name}</span>
+                        <span class="text-xs text-white/30 shrink-0 ml-2">{chapters.length} chapters</span>
+                     </div>
+                  {:else}
+                     <div class="rounded-lg border border-dashed border-white/10 p-4 text-center text-xs text-white/20">
+                        Selecciona un archivo con chapters embebidos
+                     </div>
+                  {/if}
+               </div>
+
+               {#if chapters.length}
+                  <ul class="flex flex-col gap-1 overflow-y-auto max-h-48">
+                     {#each chapters as ch (ch.index)}
+                        <li class="rounded-lg bg-white/5 px-3 py-1.5 text-xs text-white/60">
+                           [{ch.index}] {ch.title}
+                        </li>
+                     {/each}
+                  </ul>
+               {:else if fileInfo}
+                  <span class="text-xs text-yellow-400">⚠ Este archivo no tiene chapters embebidos</span>
+               {/if}
+
+               <!-- Info publisher + Prompt + Glossary en una fila -->
+               <div class="grid grid-cols-3 gap-2">
+                  <button
+                     class="flex items-center justify-between rounded-lg border px-3 py-2 text-xs text-left transition-all cursor-pointer
+      {publisherInfo.trim()
+                        ? 'border-emerald-500/30 bg-emerald-500/5 hover:border-emerald-500/50'
+                        : 'border-white/10 bg-white/5 hover:border-white/20'}"
+                     onclick={() => (showInfoModal = true)}
+                  >
+                     <span class="text-white/60 truncate">Info</span>
+                     <span class="{publisherInfo.trim() ? 'text-emerald-400' : 'text-white/20'} shrink-0 ml-2">
+                        {publisherInfo.trim() ? "✓" : "—"}
+                     </span>
+                  </button>
+                  <button
+                     class="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20"
+                     onclick={() => (showPromptModal = true)}
+                  >
+                     <span class="text-white/60 truncate">Prompt</span>
+                     <span class="text-white/30 shrink-0 ml-2 truncate"
+                        >{languageLabel(selectedLanguage)}{promptDirty ? " ·" : ""}</span
+                     >
+                  </button>
+                  <button
+                     class="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20"
+                     onclick={() => (showGlossaryModal = true)}
+                  >
+                     <span class="text-white/60 truncate">Glossary</span>
+                     <span class="text-white/30 shrink-0 ml-2 truncate"
+                        >{languageLabel(selectedLanguage)}{glossaryDirty ? " ·" : ""}</span
+                     >
+                  </button>
+               </div>
+
+               <!-- Modelo -->
+               <div class="flex flex-col gap-1.5">
+                  <span class="text-xs text-white/40">Modelo</span>
+                  <select
+                     bind:value={selectedModel}
+                     class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
+                  >
+                     {#if !models.length}
+                        <option value="">
+                           {mode === "remote" ? "Sin modelos en el mediador" : "Sin modelos en /models"}
+                        </option>
+                     {/if}
+                     {#each models as m (m)}<option value={m}>{m}</option>{/each}
+                  </select>
+                  {#if mode === "remote" && !models.length}
+                     <span class="text-xs text-yellow-400">
+                        Este mediador no tiene ningún .gguf copiado en translation_models/ todavía.
+                     </span>
+                  {/if}
+               </div>
+
+               <!-- Parámetros -->
+               <div class="grid grid-cols-3 gap-3">
+                  <div class="flex flex-col gap-1.5">
+                     <label class="text-[11px] text-white/40" for="gpuLayers">GPU layers</label>
+                     <input
+                        id="gpuLayers"
+                        type="number"
+                        bind:value={nGpuLayers}
+                        min="0"
+                        class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white text-center outline-none focus:border-indigo-500/50 transition-colors"
+                     />
+                  </div>
+                  <div class="flex flex-col gap-1.5">
+                     <label class="text-[11px] text-white/40" for="ctx">Contexto</label>
+                     <input
+                        id="ctx"
+                        type="number"
+                        bind:value={nCtx}
+                        min="512"
+                        step="512"
+                        class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white text-center outline-none focus:border-indigo-500/50 transition-colors"
+                     />
+                  </div>
+                  <div class="flex flex-col gap-1.5">
+                     <label class="text-[11px] text-white/40" for="temp">Temperatura</label>
+                     <input
+                        id="temp"
+                        type="number"
+                        bind:value={temperature}
+                        min="0"
+                        max="2"
+                        step="0.1"
+                        class="w-full rounded-lg border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-white text-center outline-none focus:border-indigo-500/50 transition-colors"
+                     />
+                  </div>
+               </div>
+
+               {#if outputPath}
+                  <span class="text-[11px] text-white/25 truncate">Salida: {outputPath}</span>
+               {/if}
+
+               <button
+                  class="w-full rounded-lg bg-indigo-600 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed"
+                  onclick={run}
+                  disabled={!canRun}
+               >
+                  Ejecutar traducción
+               </button>
+            {:else}
+               <!-- Progreso simple -->
+               <div class="flex items-center gap-3 rounded-lg border border-white/10 bg-white/5 px-4 py-3">
+                  {#if processing}<Spinner size={14} duration="1.5s" />{/if}
+                  <span class="text-sm text-white/80">
+                     {#if done === true}Completado ✓{:else if done === false}Falló / cancelado ✕{:else}{phaseText}{/if}
+                  </span>
+               </div>
+
+               {#if workInfoText}
+                  <div class="flex flex-col gap-1 rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+                     <span class="text-[11px] text-white/30">Work info</span>
+                     <p class="text-xs text-white/50 whitespace-pre-wrap max-h-40 overflow-y-auto">{workInfoText}</p>
+                  </div>
+               {/if}
+
+               <div class="flex gap-2">
+                  {#if processing}
+                     <button
+                        class="flex-1 rounded-lg border border-red-500/30 py-2 text-xs text-red-400 hover:bg-red-500/10 transition-colors"
+                        onclick={cancel}
+                     >
+                        Detener
                      </button>
                   {/if}
                   <button
-                     class="flex-1 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-medium text-white hover:bg-indigo-500 transition-colors"
-                     onclick={() => {
-                        done = null;
-                     }}
+                     class="flex-1 rounded-lg border border-white/10 py-2 text-xs text-white/60 hover:text-white transition-colors"
+                     onclick={() => (showLogs = true)}
                   >
-                     Volver
+                     Ver logs
                   </button>
                </div>
-            {/if}
-         {/if}
-      </div>
-   </main>
-</div>
-{/if}
 
+               {#if done !== null && !processing}
+                  <div class="flex gap-2">
+                     {#if done === true}
+                        <button
+                           class="flex-1 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-xs text-white/60 hover:text-white transition-colors"
+                           onclick={() => bridge.open_folder(outputPath)}
+                        >
+                           Abrir carpeta
+                        </button>
+                     {/if}
+                     <button
+                        class="flex-1 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-medium text-white hover:bg-indigo-500 transition-colors"
+                        onclick={() => {
+                           done = null;
+                        }}
+                     >
+                        Volver
+                     </button>
+                  </div>
+               {/if}
+            {/if}
+         </div>
+      </main>
+   </div>
+{/if}

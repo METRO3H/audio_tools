@@ -534,21 +534,13 @@
             </div>
 
             <!-- Título/info del publisher + Prompt + Glossary — misma fila -->
+            <!-- Prompt + Glossary + Título/info — misma fila.
+                 Título/info es opcional, por eso va último y con indicador
+                 claro de si tiene contenido cargado. -->
             <div class="grid grid-cols-3 gap-2">
                <button
                   class="flex items-center justify-between rounded-lg border border-white/10
-                     bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20"
-                  onclick={() => (showTitleInfoModal = true)}
-               >
-                  <span class="text-white/60 truncate">Título/info</span>
-                  <span class="{hasTitleOrInfo ? 'text-emerald-400' : 'text-white/30'} shrink-0 ml-2">
-                     {hasTitleOrInfo ? "✓" : "—"}
-                  </span>
-               </button>
-
-               <button
-                  class="flex items-center justify-between rounded-lg border border-white/10
-                     bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20"
+                     bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20 cursor-pointer"
                   onclick={() => (showPromptModal = true)}
                >
                   <span class="text-white/60 truncate">Prompt</span>
@@ -559,13 +551,33 @@
 
                <button
                   class="flex items-center justify-between rounded-lg border border-white/10
-                     bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20"
+                     bg-white/5 px-3 py-2 text-xs text-left transition-all hover:border-white/20 cursor-pointer"
                   onclick={() => (showGlossaryModal = true)}
                >
                   <span class="text-white/60 truncate">Glossary</span>
                   <span class="text-white/30 shrink-0 ml-2 truncate">
                      {languageLabel(selectedLanguage)}{glossaryDirty ? " ·" : ""}
                   </span>
+               </button>
+
+               <!-- Título/info: opcional. El borde y el fondo se tiñen de
+                    esmeralda + aparece un ✓ cuando hay contenido cargado,
+                    así se ve de un vistazo si el usuario lo completó o no. -->
+               <button
+                  class="flex items-center justify-between rounded-lg border px-3 py-2 text-xs text-left transition-all cursor-pointer
+                     {hasTitleOrInfo
+                        ? 'border-emerald-500/30 bg-emerald-500/5 hover:border-emerald-500/50'
+                        : 'border-white/10 bg-white/5 hover:border-white/20'}"
+                  onclick={() => (showTitleInfoModal = true)}
+               >
+                  <span class="{hasTitleOrInfo ? 'text-white/80' : 'text-white/60'} truncate">
+                     Título/info
+                  </span>
+                  {#if hasTitleOrInfo}
+                     <span class="shrink-0 ml-2 text-emerald-400 text-xs font-medium">✓</span>
+                  {:else}
+                     <span class="shrink-0 ml-2 text-white/20 text-xs">—</span>
+                  {/if}
                </button>
             </div>
 

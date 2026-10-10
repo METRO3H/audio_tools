@@ -1,5 +1,3 @@
-
-
 @import "tailwindcss";
 
 * {
@@ -7,3 +5,36 @@
   scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
 }
 
+/* ── Form controls: forzar tema oscuro en WebView2 ────────────────────
+   El motor de WebView2 (Chromium) decide los colores del popup nativo
+   de <select> en base al `color-scheme` del documento. Si no se declara,
+   asume tema claro → texto claro de la app sobre fondo blanco del sistema
+   → items invisibles hasta que el hover pinta un fondo oscuro.
+   `color-scheme` va en `html`, no en `select`. */
+html {
+  color-scheme: dark;
+}
+
+/* El popup del dropdown NO hereda los estilos del <select>.
+   Los <option> hay que pintarlos aparte — con fondo oscuro explícito
+   y color de texto claro para que sean legibles sin hover. */
+select option {
+  background-color: #18181b; /* zinc-900, mismo que el <select> cerrado */
+  color: #e4e4e7;            /* zinc-200 */
+}
+select option:checked {
+  background-color: #4f46e5; /* indigo-600, para que se note el seleccionado */
+  color: #ffffff;
+}
+
+/* ── Ocultar flechitas de inputs numéricos (GPU layers, Contexto, ...) */
+input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
