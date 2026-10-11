@@ -5,15 +5,15 @@
 import { persistentConfig } from "@shared/services/persistentConfig.js";
    import ProcessingView from "@shared/components/ProcessingView.svelte";
    import ViewHeader from "@shared/components/ViewHeader.svelte";
-   import { basename, folderName } from "@shared/utils.js";
+   import { formatDuration } from "@shared/utils.js";
+   import { useToolRun } from "@shared/state/useToolRun.svelte.js";
    let { goHome } = $props();
 
-   const VIDEO_EXTS = ["*.mp4", "*.mkv", "*.avi", "*.mov", "*.webm"];
+   const job = useToolRun("run_diverge");
 
    // ── Estado ───────────────────────────────────────────────────────────────────
 
    let mediaType = $state("audio");
-   let processing = $state(false);
    let fileInfo = $state(null);
    let chapters = $state([]);
    let hasChapters = $state(false);
@@ -22,6 +22,12 @@ import { persistentConfig } from "@shared/services/persistentConfig.js";
    let outputFolder = $state("");
    let useSubfolder = $state(true);
    let autoHint = $state("");
+
+   // Plan que calcula el backend (nombres, rutas y duraciones de los segmentos).
+   // Es la única fuente: lo que se muestra aquí es exactamente lo que se ejecutará.
+   let plan = $state(null); // { output_dir, segments: [{ index, name, start, end, duration, output }] } | null
+   let planError = $state("");
+   let planPending = $state(false);
 
 
    // ── Cargar configuración guardada ────────────────────────────────────────────
@@ -49,72 +55,71 @@ $effect(() => {
 
    const intervalSeconds = $derived(intervalMins * 60);
 
-   const outputFormat = $derived(fileInfo ? fileInfo.name.split(".").pop().toLowerCase() : "mp3");
-
-   // Fuente del nombre usado para los segmentos: en audio es la carpeta base
-   // (nombre del proyecto), en video es el nombre del propio archivo (sin extensión),
-   // ya que en modo video no existe un concepto de "carpeta base".
-   const namingSource = $derived(
-      mediaType === "video"
-         ? fileInfo
-            ? fileInfo.name.replace(/\.[^.]+$/, "")
-            : ""
-         : folderName(appConfig.baseFolder),
-   );
-
-   const estimatedSegments = $derived(() => {
-      if (!fileInfo || segmentMode === "chapters") return [];
-      const total = fileInfo.duration_seconds;
-      const interval = intervalSeconds;
-      if (!total || !interval) return [];
-      const count = Math.ceil(total / interval);
-      return Array.from({ length: count }, (_, i) => ({
-         name: `[${i + 1}] ${namingSource}.${outputFormat}`,
-         size_mb: 0,
-         duration_seconds: Math.min(interval, total - i * interval),
-         path: "",
-      }));
-   });
-
-   const fileInfos = $derived(
-      segmentMode === "chapters"
-         ? chapters.map((ch, i) => ({
-              name: `[${i + 1}] ${namingSource} - ${ch.title}.${outputFormat}`,
-              size_mb: 0,
-              duration_seconds: ch.end - ch.start,
-              path: "",
-           }))
-         : estimatedSegments(),
-   );
-
+   // Solo una etiqueta de la interfaz; las rutas reales las decide el backend (plan.output_dir).
    const outputSubfolder = $derived(mediaType === "video" ? "videos" : "audios");
 
-   // Carpeta efectiva donde se va a guardar:
-   //  - toggle ON  → se infiere sola (carpeta base en audio, carpeta del archivo en video)
-   //  - toggle OFF → la que el usuario eligió manualmente
-   const effectiveOutputFolder = $derived.by(() => {
-      if (!useSubfolder) return outputFolder;
-      if (mediaType === "audio") return appConfig.baseFolder;
-      if (!fileInfo?.path) return "";
-      const idx = Math.max(fileInfo.path.lastIndexOf("\\"), fileInfo.path.lastIndexOf("/"));
-      return idx >= 0 ? fileInfo.path.slice(0, idx) : "";
+   // Opciones que se le envían al backend, o null si todavía no hay con qué planificar.
+   // El backend deduce la carpeta de salida, el formato y los nombres; los capítulos
+   // los lee él mismo del archivo.
+   const planOptions = $derived.by(() => {
+      if (!fileInfo?.path || !appConfig.baseFolder) return null;
+      if (segmentMode === "interval" && !(intervalMins > 0)) return null;
+      if (!useSubfolder && !outputFolder) return null;
+      return {
+         file_path: fileInfo.path,
+         base_folder: appConfig.baseFolder,
+         segment_mode: segmentMode,
+         interval_seconds: segmentMode === "interval" ? intervalSeconds : null,
+         output_folder: useSubfolder ? null : outputFolder,
+         media_type: mediaType,
+         use_subfolder: useSubfolder,
+         duration_seconds: fileInfo.duration_seconds > 0 ? fileInfo.duration_seconds : null,
+      };
    });
 
-   const outputPath = $derived.by(() => {
-      if (!effectiveOutputFolder) return "";
-      if (!useSubfolder) return effectiveOutputFolder;
-      return `${effectiveOutputFolder}\\${outputSubfolder}\\parts`;
+   // Filas que muestra ProcessingView: salen del plan.
+   const fileInfos = $derived(
+      (plan?.segments ?? []).map((s) => ({ name: s.name, size_mb: 0, duration_seconds: s.duration, path: "" })),
+   );
+
+   // No se puede ejecutar mientras haya una consulta de plan en vuelo: el plan que se
+   // ve podría no corresponder todavía a lo que el usuario acaba de cambiar.
+   const canRun = $derived(!!fileInfo && !!plan && !planPending && !progress.running);
+
+   // ── Plan (con debounce) ──────────────────────────────────────────────────────
+
+   const PLAN_DEBOUNCE_MS = 200;
+   let planSeq = 0;
+
+   $effect(() => {
+      const options = planOptions;
+      const seq = ++planSeq;
+
+      if (!options) {
+         plan = null;
+         planError = "";
+         planPending = false;
+         return;
+      }
+
+      planPending = true;
+      const timer = setTimeout(async () => {
+         const result = await bridge
+            .plan_diverge(options)
+            .catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
+         if (seq !== planSeq) return; // llegó tarde: ya hay una consulta más reciente
+         planPending = false;
+         if (result?.error) {
+            plan = null;
+            planError = result.error;
+         } else {
+            plan = result;
+            planError = "";
+         }
+      }, PLAN_DEBOUNCE_MS);
+
+      return () => clearTimeout(timer);
    });
-
-   const canRun = $derived(!!fileInfo && !!effectiveOutputFolder && intervalMins > 0 && !progress.running);
-
-   function formatDuration(seconds) {
-      const h = Math.floor(seconds / 3600);
-      const m = Math.floor((seconds % 3600) / 60);
-      const s = Math.floor(seconds % 60);
-      if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-      return `${m}:${String(s).padStart(2, "0")}`;
-   }
 
    // ── Reset al cambiar tipo ────────────────────────────────────────────────────
 
@@ -158,8 +163,7 @@ $effect(() => {
    }
 
    async function pickFile() {
-      const exts =
-         mediaType === "audio" ? ["*.mp3", "*.wav", "*.m4a", "*.aac", "*.ogg", "*.flac", "*.opus"] : VIDEO_EXTS;
+      const exts = appConfig.mediaExtensions[mediaType].map((ext) => "*" + ext);
       const paths = await bridge.pick_files(exts, appConfig.baseFolder, mediaType);
       if (!paths.length) return;
 
@@ -184,41 +188,21 @@ $effect(() => {
 
    async function run() {
       if (!canRun) return;
-      progress.reset();
-      processing = true;
-      progress.running = true;
-
-      await bridge.run_diverge(
-         fileInfo.path,
-         appConfig.baseFolder,
-         effectiveOutputFolder,
-         intervalSeconds,
-         outputFormat,
-         segmentMode === "chapters" ? chapters : null,
-         mediaType,
-         useSubfolder,
-      );
-   }
-
-   function cancel() {
-      bridge.cancel();
-   }
-
-   function goBack() {
-      processing = false;
-      progress.reset();
+      // El run relee la duración del archivo en vez de fiarse de la del preview.
+      const { duration_seconds, ...options } = planOptions;
+      await job.start(options);
    }
 </script>
 
-{#if processing}
+{#if job.processing}
    <ProcessingView
       title="Diverge"
       {goHome}
       {fileInfos}
-      {outputPath}
+      outputPath={plan?.output_dir ?? ""}
       showOpenFile={false}
-      onCancel={cancel}
-      onBack={goBack}
+      onCancel={job.cancel}
+      onBack={job.back}
    />
 {:else}
    <div class="flex h-full flex-col">
@@ -354,9 +338,9 @@ $effect(() => {
                        text-sm text-white outline-none focus:border-indigo-500/50
                        transition-colors text-center"
                      />
-                     {#if fileInfo}
+                     {#if plan}
                         <span class="text-xs text-white/30">
-                           ≈ {estimatedSegments().length} segmentos
+                           {plan.segments.length} segmentos
                         </span>
                      {/if}
                   </div>
@@ -369,8 +353,8 @@ $effect(() => {
                   <span class="text-xs text-white/70">
                      Guardar en subcarpeta <code class="text-white/40">{outputSubfolder}/parts</code>
                   </span>
-                  {#if outputPath}
-                     <span class="truncate text-[11px] text-white/30">{outputPath}</span>
+                  {#if plan}
+                     <span class="truncate text-[11px] text-white/30">{plan.output_dir}</span>
                   {/if}
                </div>
                <button
@@ -404,6 +388,10 @@ $effect(() => {
                      </span>
                   </button>
                </div>
+            {/if}
+
+            {#if planError}
+               <span role="alert" class="text-xs text-red-400 break-words">{planError}</span>
             {/if}
 
             <!-- Botón -->

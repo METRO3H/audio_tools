@@ -1,18 +1,14 @@
-
 from __future__ import annotations
 
-import re
 import threading
 from pathlib import Path
 from typing import Callable
 
 import config
+from core.filenames import sanitize_name
 from core.lang_detect import detect_language
 from core.translation.model_manager import ModelManager, TranslationBackend
 from core.translation import prompts
-
-_INVALID_WIN_CHARS = re.compile(r'[<>:"/\\|?*]')
-
 
 class FilenameTranslateRunner:
     """
@@ -194,9 +190,7 @@ class FilenameTranslateRunner:
 
     @staticmethod
     def _sanitize(name: str) -> str:
-        name = _INVALID_WIN_CHARS.sub("", name)
-        name = re.sub(r"\s+", " ", name).strip()
-        return name or "untitled"
+        return sanitize_name(name) or "untitled"
 
     @staticmethod
     def _unique_path(path: Path) -> Path:
@@ -209,4 +203,3 @@ class FilenameTranslateRunner:
             if not candidate.exists():
                 return candidate
             i += 1
-

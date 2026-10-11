@@ -10,6 +10,7 @@
  *   import { appConfig } from '@shared/state/config.svelte.js'
  *
  *   appConfig.baseFolder          // string — carpeta base actual
+ *   appConfig.mediaExtensions     // { audio: ['.mp3', ...], video: ['.mp4', ...] } — del backend
  *   appConfig.setBaseFolder(path) // actualiza la carpeta base
  *   await appConfig.init()        // carga config desde el backend
  */
@@ -21,6 +22,7 @@ import { bridge } from "@shared/services/bridge.svelte.js";
 export const appConfig = $state({
    baseFolder: "",
    defaultBaseFolder: "",
+   mediaExtensions: { audio: [], video: [] },
    loaded: false,
 
    async init() {
@@ -28,6 +30,7 @@ export const appConfig = $state({
       this.baseFolder = cfg.default_base_folder;
       this.defaultBaseFolder = cfg.default_base_folder;
       this.transcribeInitialPrompt = cfg.transcribe_initial_prompt ?? "";
+      this.mediaExtensions = cfg.media_extensions ?? { audio: [], video: [] };
       this.loaded = true;
    },
 

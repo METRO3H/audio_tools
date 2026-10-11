@@ -26,9 +26,30 @@
    let showLogs = $state(false);
    let selectedFileIndex = $state(null);
 
+   // ── Cancelación ─────────────────────────────────────────────────────────────
+   // Entre el clic en "Cancelar" y el `audiotools:done` puede pasar tiempo (p. ej. la
+   // transcripción solo revisa la bandera entre segmentos): se muestra "Cancelando...".
+
+   let cancelling = $state(false);
+
+   async function handleCancel() {
+      cancelling = true;
+      try {
+         await onCancel?.();
+      } catch {
+         cancelling = false; // el puente falló: se puede volver a intentar
+      }
+   }
+
+   $effect(() => {
+      if (!progress.running) cancelling = false;
+   });
+
    function fileStatus(index) {
       if (progress.success === true || index < progress.completed) return "Completado";
-      if (index === progress.fileIndex && progress.success === false) return "Finalizado con error";
+      if (index === progress.fileIndex && progress.success === false) {
+         return progress.cancelled ? "Cancelado" : "Finalizado con error";
+      }
       if (progress.running && index === progress.fileIndex) return "Procesando";
       return "En espera";
    }
@@ -69,14 +90,26 @@
       progress.success === true
          ? "Completado"
          : progress.success === false
-           ? "Error"
+           ? progress.cancelled
+              ? "Cancelado"
+              : "Error"
            : progress.running
-             ? "Procesando..."
+             ? cancelling
+                ? "Cancelando..."
+                : "Procesando..."
              : "",
    );
 
    const statusColor = $derived(
-      progress.success === true ? "text-emerald-400" : progress.success === false ? "text-red-400" : "text-white/40",
+      progress.success === true
+         ? "text-emerald-400"
+         : progress.success === false
+           ? progress.cancelled
+              ? "text-amber-400"
+              : "text-red-400"
+           : cancelling
+             ? "text-amber-400"
+             : "text-white/40",
    );
 </script>
 
@@ -105,10 +138,11 @@
             <Spinner size={14} duration="1.5s" />
             <button
                class="rounded-md border border-red-500/20 bg-red-500/10 px-2.5 py-1
-                 text-xs text-red-400 hover:bg-red-500/20 transition-colors"
-               onclick={onCancel}
+                 text-xs text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-40"
+               onclick={handleCancel}
+               disabled={cancelling}
             >
-               Cancelar
+               {cancelling ? "Cancelando..." : "Cancelar"}
             </button>
          {/if}
          <button
@@ -144,8 +178,25 @@
             </div>
          </div>
 
-         <ProgressBar value={progress.value} running={progress.running} success={progress.success} />
+         <ProgressBar
+            value={progress.value}
+            running={progress.running}
+            success={progress.success}
+            cancelled={progress.cancelled}
+            {cancelling}
+         />
       </div>
+
+      <!-- Error del job (si el backend lo reportó) -->
+      {#if progress.error}
+         <div
+            role="alert"
+            class="shrink-0 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3
+                   text-xs text-red-300 break-words"
+         >
+            {progress.error}
+         </div>
+      {/if}
 
       <!-- Lista de archivos -->
       <div

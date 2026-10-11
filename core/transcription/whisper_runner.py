@@ -1,4 +1,3 @@
-
 import threading
 from pathlib import Path
 from typing import Callable
@@ -67,6 +66,11 @@ class WhisperRunner:
 
     def cancel(self) -> None:
         self._cancelled = True
+
+    @property
+    def was_cancelled(self) -> bool:
+        """True si se llamó a cancel() desde el último run_sequential."""
+        return self._cancelled
 
     # ── Internals ─────────────────────────────────────────────────────
 
@@ -165,4 +169,3 @@ class WhisperRunner:
                 self._model = None
                 self._model_key = None
                 gc.collect()
-

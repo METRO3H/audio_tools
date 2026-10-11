@@ -8,21 +8,25 @@
    *   value    number  — 0..1
    *   running  boolean — si está en curso (activa animación de pulso)
    *   success  boolean | null — null = en curso, true = ok, false = error
+   *   cancelled  boolean — con success=false: terminó por cancelación (ámbar, no rojo)
+   *   cancelling boolean — con running: se pidió cancelar y se espera a que el job se detenga
    */
 
-  let { value = 0, running = false, success = null } = $props()
+  let { value = 0, running = false, success = null, cancelled = false, cancelling = false } = $props()
 
   const percent = $derived(Math.round(value * 100))
 
   const trackColor = $derived(
     success === null ? 'bg-white/10' :
     success          ? 'bg-white/10' :
+    cancelled        ? 'bg-amber-500/20' :
                        'bg-red-500/20'
   )
 
   const fillColor = $derived(
     success === null ? 'bg-indigo-500' :
     success          ? 'bg-emerald-500' :
+    cancelled        ? 'bg-amber-500' :
                        'bg-red-500'
   )
 </script>
@@ -42,11 +46,11 @@
   <div class="flex justify-between text-xs text-white/40">
     <span>
       {#if running}
-        Procesando...
+        {cancelling ? 'Cancelando...' : 'Procesando...'}
       {:else if success === true}
         Completado
       {:else if success === false}
-        Error
+        {cancelled ? 'Cancelado' : 'Error'}
       {:else}
         Listo
       {/if}

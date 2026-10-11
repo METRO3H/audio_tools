@@ -11,9 +11,11 @@
          ? "text-emerald-400"
          : status === "Finalizado con error"
            ? "text-red-400"
-           : status === "Procesando"
-             ? "text-indigo-300"
-             : "text-white/40",
+           : status === "Cancelado"
+             ? "text-amber-400"
+             : status === "Procesando"
+               ? "text-indigo-300"
+               : "text-white/40",
    );
 
    $effect(() => {

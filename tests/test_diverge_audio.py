@@ -125,9 +125,48 @@ def test_without_subfolder_writes_directly_to_output_folder(action, tmp_path):
     assert Path(args_list[0][-1]).parent == tmp_path / "out"
 
 
-def test_segment_names_match_actual_output_filenames(action, tmp_path):
+def test_plan_names_match_actual_output_filenames(action, tmp_path):
     cfg = _config(tmp_path)
     chapters = [{"index": 1, "title": "A", "start": 0, "end": 5}, {"index": 2, "title": "B", "start": 5, "end": 9}]
     for chs in (None, chapters):
         args_list = action.build_args_list(cfg, duration=100, chapters=chs)
-        assert [Path(a[-1]).name for a in args_list] == action.get_segment_names(cfg, 100, chs)
+        plan = action.plan(cfg, 100, chs)
+        assert [Path(a[-1]).name for a in args_list] == [s.filename for s in plan.segments]
+
+
+# ── build_commands (contrato de core/jobs.py) ────────────────────────────
+
+
+def test_commands_carry_the_duration_of_their_own_segment(action, tmp_path):
+    # Regresión: api.run_diverge usaba interval_seconds como duración de TODOS los
+    # segmentos; los dos últimos (re-balanceados) duran otra cosa.
+    cmds = action.build_commands(_config(tmp_path), duration=100)
+    assert [c.duration for c in cmds] == [30, 30, 20.0, 20.0]
+    assert sum(c.duration for c in cmds) == 100
+
+
+def test_commands_durations_with_chapters_are_end_minus_start(action, tmp_path):
+    chapters = [
+        {"index": 1, "title": "Intro", "start": 0.0, "end": 12.5},
+        {"index": 2, "title": "Main", "start": 12.5, "end": 99.0},
+    ]
+    cmds = action.build_commands(_config(tmp_path), duration=99, chapters=chapters)
+    assert [c.duration for c in cmds] == [12.5, 86.5]
+
+
+def test_commands_expose_output_and_label_and_match_build_args_list(action, tmp_path):
+    cfg = _config(tmp_path)
+    cmds = action.build_commands(cfg, duration=100)
+    out_dir = tmp_path / "out" / "audios" / "parts"
+    assert [c.label for c in cmds] == ["[1] Proj.mp3", "[2] Proj.mp3", "[3] Proj.mp3", "[4] Proj.mp3"]
+    assert [c.output for c in cmds] == [out_dir / c.label for c in cmds]
+    assert [c.args for c in cmds] == action.build_args_list(cfg, duration=100)
+    assert all(c.args[-1] == str(c.output) for c in cmds)
+
+
+def test_planning_has_no_side_effects(action, tmp_path):
+    cfg = _config(tmp_path)
+    action.plan(cfg, 100)
+    assert not (tmp_path / "out").exists()
+    action.build_commands(cfg, 100)
+    assert (tmp_path / "out" / "audios" / "parts").is_dir()

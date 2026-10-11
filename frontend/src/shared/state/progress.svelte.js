@@ -4,10 +4,16 @@
  * Estado global de progreso para cualquier operación en curso.
  *
  * Escucha los CustomEvents que api.py emite via evaluate_js():
- *   audiotools:progress  { value: float 0..1 }
+ *   audiotools:start     { job_id, tool, total }                (tools con contrato core/jobs.py)
+ *   audiotools:progress  { value: float 0..1, ... }
  *   audiotools:log       { message: string }
  *   audiotools:file      { index: int, done: bool, started_at?: float, elapsed?: float }
- *   audiotools:done      { success: bool, elapsed?: float }
+ *   audiotools:done      { success: bool, cancelled?: bool, elapsed?: float, error?: string }
+ *
+ * Las tools migradas al contrato agregan `job_id` a cada evento. Si el evento
+ * trae job_id y no coincide con `progress.jobId` (p. ej. el `done` rezagado de
+ * un job cancelado) se descarta. Los eventos sin job_id (tools aun sin migrar)
+ * se procesan como siempre.
  *
  * Uso:
  *   import { progress } from '@shared/state/progress.svelte.js'
@@ -16,6 +22,9 @@
  *   progress.running    // bool
  *   progress.logs       // string[]
  *   progress.success    // bool | null (null = en curso)
+ *   progress.error      // string | null (mensaje cuando el job falla)
+ *   progress.cancelled  // bool (true = terminó porque el usuario lo canceló; no es un error)
+ *   progress.jobId      // string | null (lo asigna useToolRun)
  *   progress.files      // { index: int, done: bool }[]
  *   progress.reset()    // limpia para una nueva operación
  */
@@ -34,6 +43,9 @@ export const progress = $state({
    total: 0,
    startTime: null,
    elapsed: 0,
+   jobId: null,
+   error: null,
+   cancelled: false,
 
    reset() {
       this.value = 0;
@@ -47,13 +59,32 @@ export const progress = $state({
       this.total = 0;
       this.startTime = null;
       this.elapsed = 0;
+      this.jobId = null;
+      this.error = null;
+      this.cancelled = false;
    },
 });
+
+/**
+ * ¿El evento pertenece a otro job distinto del actual?
+ * Sin job_id (tools sin migrar) nunca se considera rezagado.
+ * @param {{ job_id?: string | null }} detail
+ */
+function isStale(detail) {
+   return detail.job_id != null && detail.job_id !== progress.jobId;
+}
 
 // ── Listeners ──────────────────────────────────────────────────────────────────
 
 if (typeof window !== "undefined") {
+   window.addEventListener("audiotools:start", (/** @type {CustomEvent} */ e) => {
+      if (isStale(e.detail)) return;
+      progress.total = e.detail.total ?? progress.total;
+      if (!progress.startTime) progress.startTime = Date.now();
+   });
+
    window.addEventListener("audiotools:progress", (/** @type {CustomEvent} */ e) => {
+      if (isStale(e.detail)) return;
       if (!progress.running) return;
       if (!progress.startTime) progress.startTime = Date.now();
       progress.value = e.detail.value;
@@ -64,10 +95,12 @@ if (typeof window !== "undefined") {
    });
 
    window.addEventListener("audiotools:log", (/** @type {CustomEvent} */ e) => {
+      if (isStale(e.detail)) return;
       progress.logs = [...progress.logs, e.detail.message];
    });
 
    window.addEventListener("audiotools:file", (/** @type {CustomEvent} */ e) => {
+      if (isStale(e.detail)) return;
       if (!progress.running) return;
       const { index, done } = e.detail;
       const updated = [...progress.files];
@@ -75,9 +108,12 @@ if (typeof window !== "undefined") {
       progress.files = updated;
    });
 
-   window.addEventListener("audiotools:done", (e) => {
+   window.addEventListener("audiotools:done", (/** @type {CustomEvent} */ e) => {
+      if (isStale(e.detail)) return;
       progress.running = false;
       progress.success = e.detail.success;
+      progress.error = e.detail.error ?? null;
+      progress.cancelled = e.detail.cancelled === true;
       progress.value = e.detail.success ? 1 : progress.value;
       // Si el backend manda su propio elapsed (medido con su propio reloj,
       // mas preciso), se usa ese en vez de aproximarlo con Date.now() del

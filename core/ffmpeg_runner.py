@@ -1,4 +1,3 @@
-
 import re
 import subprocess
 import threading
@@ -53,6 +52,11 @@ class FFmpegRunner:
         self._cancelled = True
         if self._process and self._process.poll() is None:
             self._process.terminate()
+
+    @property
+    def was_cancelled(self) -> bool:
+        """True si se llamó a cancel() desde el último run/run_sequential."""
+        return self._cancelled
 
     def _run_single(
         self,
@@ -120,4 +124,3 @@ class FFmpegRunner:
             h, m, s = match.groups()
             elapsed = int(h) * 3600 + int(m) * 60 + float(s)
             on_progress(min(elapsed / duration, 1.0))
-

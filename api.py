@@ -8,14 +8,21 @@ Los eventos de progreso se emiten de vuelta al frontend via
 window.evaluate_js(), disparando CustomEvents que Svelte escucha.
 
 Convención de eventos JS:
+    audiotools:start             { detail: { job_id: str, tool: str, total: int } }
     audiotools:log               { detail: { message: str } }
     audiotools:progress          { detail: { value: float } }
     audiotools:file              { detail: { index: int, done: bool, started_at?: float, elapsed?: float } }
-    audiotools:done              { detail: { success: bool, elapsed?: float, cancelled?: bool } }
+    audiotools:done              { detail: { success: bool, elapsed?: float, cancelled?: bool, error?: str } }
     audiotools:translate:stats   { detail: { run_id: int|null, ...RunStats } } — una vez, al terminar
     audiotools:translate:block_stream  { detail: { file_index: int, text: str } }
     audiotools:translate:block_input   { detail: { file_index: int, text: str } }
     audiotools:translate:system_prompt { detail: { text: str } }
+
+Las tools migradas al contrato de core/jobs.py (hoy: diverge) reciben un
+objeto de opciones con job_id, emiten audiotools:start y agregan job_id a
+log/progress/done. Cualquier fallo lo reportan como done{success:false, error}
+y no como excepción. Las demás tools siguen con el protocolo anterior (sin
+job_id) hasta que se migren.
 
 Los campos started_at/elapsed en audiotools:file y elapsed en audiotools:done
 son opcionales — hoy solo los manda run_translate() (.srt). started_at es un
@@ -46,15 +53,23 @@ import webview
 
 import config
 from core.actions.merge_audio import MergeAudioAction
-from core.actions.diverge_audio import DivergeAudioAction
+from core.actions.diverge_audio import DivergeAudioAction, resolve_diverge
 from core.actions.audio_to_video import AudioToVideoAction, ENCODERS
 from core.transcription.transcribe_action import TranscribeAction
 from core.transcription.whisper_runner import WhisperRunner
 from core.ffmpeg_runner import FFmpegRunner
+from core.jobs import (
+    JobEvents,
+    describe_error,
+    job_cancelled,
+    job_errors,
+    job_id_from,
+    run_ffmpeg_commands,
+)
 from core.media_info import get_duration, get_chapters
 from core.models import (
     MergeAudioConfig,
-    DivergeAudioConfig,
+    DivergeOptions,
     AudioToVideoConfig,
     TranscribeConfig,
 )
@@ -164,6 +179,10 @@ class AudioToolsAPI:
         return {
             "default_base_folder": str(config.DEFAULT_BASE_FOLDER),
             "transcribe_initial_prompt": config.TRANSCRIBE_INITIAL_PROMPT,
+            "media_extensions": {
+                "audio": sorted(_AUDIO_EXTS),
+                "video": sorted(_VIDEO_EXTS),
+            },
         }
 
     def get_duration(self, file_path: str) -> float:
@@ -281,7 +300,10 @@ class AudioToolsAPI:
                     except Exception:
                         pass
             action.cleanup()
-            _emit(self._window, "audiotools:done", {"success": success})
+            _emit(self._window, "audiotools:done", {
+                "success": success,
+                "cancelled": job_cancelled(self._ffmpeg, success),
+            })
 
         self._ffmpeg.run(
             args=args,
@@ -293,65 +315,62 @@ class AudioToolsAPI:
 
     # — Diverge ———————————————————————————————————————————————————————————————
 
-    def run_diverge(
-        self,
-        file_path: str,
-        base_folder: str,
-        output_folder: str,
-        interval_seconds: int,
-        output_format: str,
-        chapters: list[dict] | None = None,
-        media_type: str = "audio",
-        use_subfolder: bool = True,
-    ) -> None:
+    def plan_diverge(self, options: dict) -> dict:
         """
-        Divide un archivo en segmentos.
+        Qué va a producir un diverge, sin ejecutarlo: nombres, rutas y duraciones
+        de cada segmento. Es la misma planificación que usa run_diverge, así que
+        lo que se muestra es exactamente lo que se ejecutará.
 
-        Parámetros JS:
-            file_path        ruta absoluta del archivo fuente
-            base_folder      carpeta base del proyecto (naming en modo audio)
-            output_folder    carpeta donde se escriben los segmentos
-            interval_seconds duración de cada segmento en segundos (usado si chapters es None)
-            output_format    extensión de salida
-            chapters         lista de chapters (o null para intervalo fijo)
-            media_type       "audio" | "video"
-            use_subfolder    si True, escribe en {output_folder}/audios|videos/parts
+        Recibe las mismas opciones que run_diverge (ver DivergeOptions). Conviene
+        enviar duration_seconds (ya conocida por el frontend) para no lanzar
+        ffprobe en cada consulta.
+
+        Nunca lanza: devuelve {"error": "mensaje"} si algo falla; si todo va bien,
+            {
+              "output_dir": str,
+              "segments": [{index, name, start, end, duration, output}, ...]
+            }
+        No crea carpetas ni escribe nada.
         """
+        try:
+            opts = DivergeOptions.from_dict(options)
+            inputs = resolve_diverge(opts, *self._diverge_probes())
+            return DivergeAudioAction().plan(
+                inputs.config, inputs.duration, inputs.chapters
+            ).to_dict()
+        except Exception as exc:  # noqa: BLE001 - el frontend solo necesita el mensaje
+            return {"error": describe_error(exc)}
 
-        input_file = Path(file_path)
-        duration = get_duration(config.FFPROBE_BIN, input_file)
+    def run_diverge(self, options: dict) -> None:
+        """
+        Divide un archivo en segmentos. Retorna de inmediato: el avance llega
+        por los eventos audiotools:start/log/progress/done (todos con job_id).
+        Cualquier error (opciones inválidas, archivo ilegible...) llega como
+        audiotools:done con success=false y error, nunca como excepción.
 
-        config_ = DivergeAudioConfig(
-            input_file=input_file,
-            base_folder=Path(base_folder),
-            output_folder=Path(output_folder),
-            interval_seconds=interval_seconds,
-            output_format=output_format,
-            media_type=media_type,
-            use_subfolder=use_subfolder,
+        Opciones (claves snake_case): las mismas que plan_diverge, más job_id
+        (generado por el frontend). Ver core/models.py::DivergeOptions.
+        El run lee la duración del archivo y, en modo "chapters", los capítulos.
+        """
+        events = JobEvents(
+            lambda event, detail: _emit(self._window, event, detail),
+            tool="diverge",
+            job_id=job_id_from(options),
         )
-        action = DivergeAudioAction()
-        args_list = action.build_args_list(config_, duration, chapters or None)
-        durations = [
-            (ch["end"] - ch["start"]) if chapters else interval_seconds
-            for ch in (chapters or [None] * len(args_list))
-        ]
+        with job_errors(events):
+            opts = DivergeOptions.from_dict(options)
+            inputs = resolve_diverge(opts, *self._diverge_probes())
+            commands = DivergeAudioAction().build_commands(
+                inputs.config, inputs.duration, inputs.chapters
+            )
+            run_ffmpeg_commands(self._ffmpeg, commands, events)
 
-        on_log, on_progress, on_file_start, on_file_done = _make_sequential_callbacks(
-            self._window, len(args_list)
-        )
-
-        def on_done(success: bool):
-            _emit(self._window, "audiotools:done", {"success": success})
-
-        self._ffmpeg.run_sequential(
-            args_list=args_list,
-            on_log=on_log,
-            on_done=on_done,
-            on_progress=on_progress,
-            on_file_start=on_file_start,
-            on_file_done=on_file_done,
-            durations=durations,
+    @staticmethod
+    def _diverge_probes():
+        """Sondas de ffprobe (duración y capítulos) para resolve_diverge."""
+        return (
+            lambda path: get_duration(config.FFPROBE_BIN, path),
+            lambda path: get_chapters(config.FFPROBE_BIN, path),
         )
 
     # — Audio to Video ——————————————————————————————————————————————————————
@@ -395,7 +414,10 @@ class AudioToolsAPI:
         )
 
         def on_done(success: bool):
-            _emit(self._window, "audiotools:done", {"success": success})
+            _emit(self._window, "audiotools:done", {
+                "success": success,
+                "cancelled": job_cancelled(self._ffmpeg, success),
+            })
 
         self._ffmpeg.run_sequential(
             args_list=args_list,
@@ -582,9 +604,7 @@ class AudioToolsAPI:
             })
 
         def on_done(success: bool, all_segments: list):
-            detail = {"success": success}
-            if is_remote and getattr(runner, "was_cancelled", False):
-                detail["cancelled"] = True
+            detail = {"success": success, "cancelled": job_cancelled(runner, success)}
             _emit(self._window, "audiotools:done", detail)
             if is_remote:
                 self._active_remote_runner = None

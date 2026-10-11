@@ -1,10 +1,18 @@
+import pytest
+
 from core.translation.filenames_runner import FilenameTranslateRunner
 
 
-def test_sanitize_removes_windows_invalid_chars_and_collapses_spaces():
-    assert FilenameTranslateRunner._sanitize('A: "B"  /  C?*') == "A B C"
-    assert FilenameTranslateRunner._sanitize('<>:"/\\|?*') == "untitled"
-    assert FilenameTranslateRunner._sanitize("   ") == "untitled"
+def test_sanitize_replaces_windows_invalid_chars_with_readable_equivalents():
+    # La regla vive en core/filenames.py (compartida con Diverge); aquí solo se fija
+    # que el renombrador la use.
+    assert FilenameTranslateRunner._sanitize('A: "B"  /  C?*') == "A - 'B' - C"
+    assert FilenameTranslateRunner._sanitize("AC/DC en vivo") == "AC-DC en vivo"
+
+
+@pytest.mark.parametrize("raw", ["", "   ", "???", ":", "***"])
+def test_sanitize_falls_back_to_untitled_when_nothing_is_left(raw):
+    assert FilenameTranslateRunner._sanitize(raw) == "untitled"
 
 
 def test_unique_path_appends_counter_before_extension(tmp_path):
