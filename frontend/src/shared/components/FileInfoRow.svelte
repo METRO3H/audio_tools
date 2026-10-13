@@ -8,6 +8,7 @@
    */
 
   import Spinner from "@shared/ui/Spinner.svelte"
+  import { formatDuration } from "@shared/utils.js"
 
   let {
     name,
@@ -20,14 +21,6 @@
     onRowClick = null,
   } = $props()
 
-  function formatDuration(seconds) {
-    const h = Math.floor(seconds / 3600)
-    const m = Math.floor((seconds % 3600) / 60)
-    const s = Math.floor(seconds % 60)
-    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-    return `${m}:${String(s).padStart(2, '0')}`
-  }
-
   const percent = $derived(progress !== null ? Math.round(progress * 100) : null)
 
   const rowColor = $derived(
@@ -35,16 +28,13 @@
     active ? 'border-indigo-500/30 bg-indigo-500/5'  :
              'border-white/5 bg-white/3'
   )
+
+  const rowClass = $derived(
+    `flex flex-col gap-1.5 rounded-lg border px-4 py-3 transition-all duration-300 ${rowColor}`
+  )
 </script>
 
-<div
-  class="flex flex-col gap-1.5 rounded-lg border px-4 py-3 transition-all duration-300 {rowColor}
-    {onRowClick ? 'cursor-pointer hover:border-white/20' : ''}"
-  role={onRowClick ? 'button' : undefined}
-  tabindex={onRowClick ? 0 : undefined}
-  onclick={onRowClick}
-  onkeydown={onRowClick ? (e) => (e.key === 'Enter' || e.key === ' ') && onRowClick(e) : undefined}
->
+{#snippet content()}
 
   <!-- Fila superior: nombre, peso (opcional), duración -->
   <div class="flex items-center justify-between gap-4">
@@ -84,5 +74,21 @@
       ></div>
     </div>
   {/if}
+{/snippet}
 
-</div>
+<!-- Con onRowClick la fila es un botón (rol y teclado); sin él, un bloque pasivo. -->
+{#if onRowClick}
+  <div
+    class="{rowClass} cursor-pointer hover:border-white/20"
+    role="button"
+    tabindex="0"
+    onclick={onRowClick}
+    onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && onRowClick(e)}
+  >
+    {@render content()}
+  </div>
+{:else}
+  <div class={rowClass}>
+    {@render content()}
+  </div>
+{/if}

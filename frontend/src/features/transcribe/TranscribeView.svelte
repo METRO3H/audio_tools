@@ -7,6 +7,7 @@
    import ProcessingView from "@shared/components/ProcessingView.svelte";
    import ViewHeader from "@shared/components/ViewHeader.svelte";
    import HoverCard from "@shared/ui/HoverCard.svelte";
+   import Modal from "@shared/ui/Modal.svelte";
    import BaseFolderPicker from "@shared/components/BaseFolderPicker.svelte";
    import Spinner from "@shared/ui/Spinner.svelte";
    import { persistentConfig } from "@shared/services/persistentConfig.js";
@@ -599,141 +600,133 @@
    </div>
 
    {#if showAdditionalOptions}
-      <button
-         type="button"
-         class="fixed inset-0 z-40 cursor-default bg-black/60 backdrop-blur-sm"
-         aria-label="Cerrar opciones adicionales"
-         onclick={() => (showAdditionalOptions = false)}
-      ></button>
-
-      <div class="fixed inset-0 z-50 flex items-center justify-center p-5">
-         <section
-            class="flex max-h-[85vh] w-full max-w-xl flex-col gap-4 overflow-y-auto rounded-2xl border border-white/10 bg-zinc-900 p-5 shadow-2xl"
-            aria-labelledby="additional-options-title"
-            role="dialog"
-            aria-modal="true"
-         >
-            <header class="flex shrink-0 items-center justify-between gap-3">
-               <div class="flex flex-col gap-1">
-                  <h2 id="additional-options-title" class="text-sm font-semibold text-white">Opciones adicionales</h2>
-                  <p class="text-xs text-white/35">Parámetros avanzados de la transcripción.</p>
-               </div>
-               <button
-                  type="button"
-                  class="rounded-md px-2 py-1 text-white/40 transition-colors hover:text-white cursor-pointer"
-                  aria-label="Cerrar"
-                  onclick={() => (showAdditionalOptions = false)}
-               >
-                  ✕
-               </button>
-            </header>
-
-            <div class="flex items-center justify-between gap-4">
-               <div class="flex min-w-0 flex-col gap-1">
-                  <div class="flex items-center gap-1.5">
-                     <span class="text-sm text-white/70">VAD filter</span>
-                     <HoverCard
-                        text="Detecta y omite los silencios del audio antes de transcribir. Puede ayudar especialmente en audios con pausas largas."
-                     />
-                  </div>
-               </div>
-               <button
-                  type="button"
-                  role="switch"
-                  aria-checked={vadFilter}
-                  aria-label="VAD filter"
-                  class="inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full p-0.5 transition-colors {vadFilter
-                     ? 'bg-indigo-600'
-                     : 'bg-white/10'}"
-                  onclick={() => (vadFilter = !vadFilter)}
-               >
-                  <span
-                     class="h-4 w-4 rounded-full bg-white shadow transition-transform duration-200 {vadFilter
-                        ? 'translate-x-4'
-                        : 'translate-x-0'}"
-                  ></span>
-               </button>
+      <Modal
+         onClose={() => (showAdditionalOptions = false)}
+         size="xl"
+         height="max-85"
+         labelledby="additional-options-title"
+         class="gap-4 overflow-y-auto"
+      >
+         <header class="flex shrink-0 items-center justify-between gap-3">
+            <div class="flex flex-col gap-1">
+               <h2 id="additional-options-title" class="text-sm font-semibold text-white">Opciones adicionales</h2>
+               <p class="text-xs text-white/35">Parámetros avanzados de la transcripción.</p>
             </div>
+            <button
+               type="button"
+               class="rounded-md px-2 py-1 text-white/40 transition-colors hover:text-white cursor-pointer"
+               aria-label="Cerrar"
+               onclick={() => (showAdditionalOptions = false)}
+            >
+               ✕
+            </button>
+         </header>
 
-            <div class="flex items-center justify-between gap-4">
-               <div class="flex min-w-0 flex-col gap-1">
-                  <div class="flex items-center gap-1.5">
-                     <span class="text-sm text-white/70">Condition on previous text</span>
-                     <HoverCard
-                        text="Usa el texto transcrito anteriormente como contexto para el siguiente segmento. Puede mejorar la coherencia, pero también causar alucinaciones en audios largos."
-                     />
-                  </div>
-               </div>
-               <button
-                  type="button"
-                  role="switch"
-                  aria-checked={conditionOnPrev}
-                  aria-label="Condition on previous text"
-                  class="inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full p-0.5 transition-colors {conditionOnPrev
-                     ? 'bg-indigo-600'
-                     : 'bg-white/10'}"
-                  onclick={() => (conditionOnPrev = !conditionOnPrev)}
-               >
-                  <span
-                     class="h-4 w-4 rounded-full bg-white shadow transition-transform duration-200 {conditionOnPrev
-                        ? 'translate-x-4'
-                        : 'translate-x-0'}"
-                  ></span>
-               </button>
-            </div>
-
-            <div class="flex items-center justify-between gap-4">
-               <div class="flex min-w-0 flex-col gap-1">
-                  <div class="flex items-center gap-1.5">
-                     <span class="text-sm text-white/70">Word timestamps</span>
-                     <HoverCard text="Calcula timestamps más precisos a nivel de palabra." />
-                  </div>
-               </div>
-               <button
-                  type="button"
-                  role="switch"
-                  aria-checked={wordTimestamps}
-                  aria-label="Word timestamps"
-                  class="inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full p-0.5 transition-colors {wordTimestamps
-                     ? 'bg-indigo-600'
-                     : 'bg-white/10'}"
-                  onclick={() => (wordTimestamps = !wordTimestamps)}
-               >
-                  <span
-                     class="h-4 w-4 rounded-full bg-white shadow transition-transform duration-200 {wordTimestamps
-                        ? 'translate-x-4'
-                        : 'translate-x-0'}"
-                  ></span>
-               </button>
-            </div>
-
-            <div class="flex flex-col gap-1.5">
+         <div class="flex items-center justify-between gap-4">
+            <div class="flex min-w-0 flex-col gap-1">
                <div class="flex items-center gap-1.5">
-                  <label class="text-xs text-white/50" for="transcribe-initial-prompt">Initial prompt</label>
+                  <span class="text-sm text-white/70">VAD filter</span>
                   <HoverCard
-                     text="Texto inicial que guía el estilo de transcripción. Puede influir en el idioma, la puntuación y el formato. El valor predeterminado se configura en config.py."
-                     position="top"
+                     text="Detecta y omite los silencios del audio antes de transcribir. Puede ayudar especialmente en audios con pausas largas."
                   />
                </div>
-               <textarea
-                  id="transcribe-initial-prompt"
-                  bind:value={initialPrompt}
-                  rows="4"
-                  placeholder="Sin prompt..."
-                  class="resize-y rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white placeholder-white/20 outline-none transition-colors focus:border-indigo-500/50"
-               ></textarea>
             </div>
+            <button
+               type="button"
+               role="switch"
+               aria-checked={vadFilter}
+               aria-label="VAD filter"
+               class="inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full p-0.5 transition-colors {vadFilter
+                  ? 'bg-indigo-600'
+                  : 'bg-white/10'}"
+               onclick={() => (vadFilter = !vadFilter)}
+            >
+               <span
+                  class="h-4 w-4 rounded-full bg-white shadow transition-transform duration-200 {vadFilter
+                     ? 'translate-x-4'
+                     : 'translate-x-0'}"
+               ></span>
+            </button>
+         </div>
 
-            <footer class="flex justify-end border-t border-white/5 pt-3">
-               <button
-                  type="button"
-                  class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-500 cursor-pointer"
-                  onclick={() => (showAdditionalOptions = false)}
-               >
-                  Listo
-               </button>
-            </footer>
-         </section>
-      </div>
+         <div class="flex items-center justify-between gap-4">
+            <div class="flex min-w-0 flex-col gap-1">
+               <div class="flex items-center gap-1.5">
+                  <span class="text-sm text-white/70">Condition on previous text</span>
+                  <HoverCard
+                     text="Usa el texto transcrito anteriormente como contexto para el siguiente segmento. Puede mejorar la coherencia, pero también causar alucinaciones en audios largos."
+                  />
+               </div>
+            </div>
+            <button
+               type="button"
+               role="switch"
+               aria-checked={conditionOnPrev}
+               aria-label="Condition on previous text"
+               class="inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full p-0.5 transition-colors {conditionOnPrev
+                  ? 'bg-indigo-600'
+                  : 'bg-white/10'}"
+               onclick={() => (conditionOnPrev = !conditionOnPrev)}
+            >
+               <span
+                  class="h-4 w-4 rounded-full bg-white shadow transition-transform duration-200 {conditionOnPrev
+                     ? 'translate-x-4'
+                     : 'translate-x-0'}"
+               ></span>
+            </button>
+         </div>
+
+         <div class="flex items-center justify-between gap-4">
+            <div class="flex min-w-0 flex-col gap-1">
+               <div class="flex items-center gap-1.5">
+                  <span class="text-sm text-white/70">Word timestamps</span>
+                  <HoverCard text="Calcula timestamps más precisos a nivel de palabra." />
+               </div>
+            </div>
+            <button
+               type="button"
+               role="switch"
+               aria-checked={wordTimestamps}
+               aria-label="Word timestamps"
+               class="inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full p-0.5 transition-colors {wordTimestamps
+                  ? 'bg-indigo-600'
+                  : 'bg-white/10'}"
+               onclick={() => (wordTimestamps = !wordTimestamps)}
+            >
+               <span
+                  class="h-4 w-4 rounded-full bg-white shadow transition-transform duration-200 {wordTimestamps
+                     ? 'translate-x-4'
+                     : 'translate-x-0'}"
+               ></span>
+            </button>
+         </div>
+
+         <div class="flex flex-col gap-1.5">
+            <div class="flex items-center gap-1.5">
+               <label class="text-xs text-white/50" for="transcribe-initial-prompt">Initial prompt</label>
+               <HoverCard
+                  text="Texto inicial que guía el estilo de transcripción. Puede influir en el idioma, la puntuación y el formato. El valor predeterminado se configura en config.py."
+                  position="top"
+               />
+            </div>
+            <textarea
+               id="transcribe-initial-prompt"
+               bind:value={initialPrompt}
+               rows="4"
+               placeholder="Sin prompt..."
+               class="resize-y rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white placeholder-white/20 outline-none transition-colors focus:border-indigo-500/50"
+            ></textarea>
+         </div>
+
+         <footer class="flex justify-end border-t border-white/5 pt-3">
+            <button
+               type="button"
+               class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-500 cursor-pointer"
+               onclick={() => (showAdditionalOptions = false)}
+            >
+               Listo
+            </button>
+         </footer>
+      </Modal>
    {/if}
 {/if}
