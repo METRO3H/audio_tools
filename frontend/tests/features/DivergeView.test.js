@@ -251,6 +251,89 @@ describe("DivergeView: modo video", () => {
    });
 });
 
+/** Vuelve a montar la vista con una configuración previamente guardada. */
+async function remount(saved) {
+   cleanup();
+   localStorage.clear();
+   if (saved) localStorage.setItem("diverge_config", JSON.stringify(saved));
+   render(DivergeView, { props: { goHome: vi.fn() } });
+   await flush();
+}
+const savedConfig = () => JSON.parse(localStorage.getItem("diverge_config"));
+const mediaButton = (name) => screen.getByRole("button", { name });
+const subfolderSwitch = () => screen.getByRole("switch", { name: /Guardar en subcarpeta/ });
+
+describe("DivergeView: configuración recordada", () => {
+   it("sin nada guardado arranca con los valores por defecto y los guarda", async () => {
+      await remount();
+      expect(mediaButton(/Audio/).getAttribute("aria-pressed")).toBe("true");
+      expect(subfolderSwitch().getAttribute("aria-checked")).toBe("true");
+      expect(savedConfig()).toEqual({ mediaType: "audio", intervalMins: 20, useSubfolder: true });
+   });
+
+   it("aplica lo guardado: tipo, intervalo y subcarpeta", async () => {
+      await remount({ mediaType: "video", intervalMins: 7, useSubfolder: false });
+      expect(mediaButton(/Video/).getAttribute("aria-pressed")).toBe("true");
+      expect(subfolderSwitch().getAttribute("aria-checked")).toBe("false");
+
+      bridge.pick_files.mockResolvedValue(["C:/videos/clip.mp4"]);
+      bridge.get_file_info.mockResolvedValue({ name: "clip.mp4", size_mb: 5, duration_seconds: 600 });
+      screen.getByRole("button", { name: "Seleccionar archivo" }).click();
+      await flush();
+      await flush();
+      expect(screen.getByLabelText("Intervalo (minutos)").value).toBe("7");
+   });
+
+   it("regresión: una configuración con segmentMode ya no se pisa al montar, y ese campo se limpia", async () => {
+      await remount({ mediaType: "audio", segmentMode: "interval", intervalMins: 7, useSubfolder: false });
+      await settle();
+      expect(savedConfig()).toEqual({ mediaType: "audio", intervalMins: 7, useSubfolder: false });
+      expect(subfolderSwitch().getAttribute("aria-checked")).toBe("false");
+   });
+
+   it("el modo de segmentación no se recuerda: lo decide el archivo (con capítulos, capítulos)", async () => {
+      await remount({ mediaType: "audio", segmentMode: "interval", intervalMins: 20, useSubfolder: true });
+      await loadFile({ chapters: CHAPTERS });
+      await settle();
+      expect(screen.getByRole("radio", { name: /Chapters/ }).checked).toBe(true);
+      expect(screen.getByRole("radio", { name: "Intervalo fijo" }).checked).toBe(false);
+   });
+
+   it("los cambios se guardan: subcarpeta e intervalo", async () => {
+      await remount();
+      await loadFile({ chapters: [] });
+      await fireEvent.click(subfolderSwitch());
+      await fireEvent.input(screen.getByLabelText("Intervalo (minutos)"), { target: { value: "12" } });
+      await flush();
+      expect(savedConfig()).toEqual({ mediaType: "audio", intervalMins: 12, useSubfolder: false });
+   });
+
+   it("cambiar de tipo descarta el archivo elegido y lo que dependía de él", async () => {
+      await remount();
+      await loadFile();
+      await settle();
+      expect(screen.getByText("show.mp3")).toBeTruthy();
+      expect(runButton().disabled).toBe(false);
+
+      await fireEvent.click(mediaButton(/Video/));
+      await settle();
+      expect(screen.queryByText("show.mp3")).toBeNull();
+      expect(runButton().disabled).toBe(true);
+      expect(screen.getByRole("button", { name: "Seleccionar archivo" })).toBeTruthy();
+      expect(savedConfig().mediaType).toBe("video");
+   });
+
+   it("volver a pulsar el tipo ya seleccionado no descarta nada", async () => {
+      await remount();
+      await loadFile();
+      await settle();
+      await fireEvent.click(mediaButton(/Audio/));
+      await settle();
+      expect(screen.getByText("show.mp3")).toBeTruthy();
+      expect(runButton().disabled).toBe(false);
+   });
+});
+
 describe("DivergeView: ejecución", () => {
    it("run_diverge recibe las opciones del plan (sin capítulos, sin formato, sin duración) más el job_id", async () => {
       await loadFile();

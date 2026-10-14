@@ -2,25 +2,34 @@
    import { bridge } from "@shared/services/bridge.svelte.js";
    import { progress } from "@shared/state/progress.svelte.js";
    import { appConfig } from "@shared/state/config.svelte.js";
-import { persistentConfig } from "@shared/services/persistentConfig.js";
    import ProcessingView from "@shared/components/ProcessingView.svelte";
    import ViewHeader from "@shared/components/ViewHeader.svelte";
    import { formatDuration } from "@shared/utils.js";
    import { useToolRun } from "@shared/state/useToolRun.svelte.js";
+   import { persisted } from "@shared/state/persisted.svelte.js";
+   import Field from "@shared/ui/Field.svelte";
+   import SegmentedControl from "@shared/ui/SegmentedControl.svelte";
+   import SwitchField from "@shared/ui/SwitchField.svelte";
    let { goHome } = $props();
+
+   const MEDIA_TYPES = [
+      { value: "audio", label: "🎵 Audio" },
+      { value: "video", label: "🎬 Video" },
+   ];
 
    const job = useToolRun("run_diverge");
 
    // ── Estado ───────────────────────────────────────────────────────────────────
 
-   let mediaType = $state("audio");
+   // Preferencias que se recuerdan entre sesiones. El modo de segmentación NO se guarda: lo decide
+   // cada archivo (con capítulos → "chapters"; sin ellos → "interval").
+   const cfg = persisted("diverge_config", { mediaType: "audio", intervalMins: 20, useSubfolder: true });
+
    let fileInfo = $state(null);
    let chapters = $state([]);
    let hasChapters = $state(false);
    let segmentMode = $state("chapters");
-   let intervalMins = $state(20);
    let outputFolder = $state("");
-   let useSubfolder = $state(true);
    let autoHint = $state("");
 
    // Plan que calcula el backend (nombres, rutas y duraciones de los segmentos).
@@ -30,49 +39,28 @@ import { persistentConfig } from "@shared/services/persistentConfig.js";
    let planPending = $state(false);
 
 
-   // ── Cargar configuración guardada ────────────────────────────────────────────
-$effect(() => {
-  const saved = persistentConfig.get('diverge_config');
-  if (saved) {
-    mediaType = saved.mediaType ?? "audio";
-    segmentMode = saved.segmentMode ?? "chapters";
-    intervalMins = saved.intervalMins ?? 20;
-    useSubfolder = saved.useSubfolder ?? true;
-  }
-});
-
-// ── Guardar configuración al cambiar ────────────────────────────────────────
-$effect(() => {
-  persistentConfig.set('diverge_config', {
-    mediaType,
-    segmentMode,
-    intervalMins,
-    useSubfolder,
-  });
-});
-
    // ── Derivados ────────────────────────────────────────────────────────────────
 
-   const intervalSeconds = $derived(intervalMins * 60);
+   const intervalSeconds = $derived(cfg.intervalMins * 60);
 
    // Solo una etiqueta de la interfaz; las rutas reales las decide el backend (plan.output_dir).
-   const outputSubfolder = $derived(mediaType === "video" ? "videos" : "audios");
+   const outputSubfolder = $derived(cfg.mediaType === "video" ? "videos" : "audios");
 
    // Opciones que se le envían al backend, o null si todavía no hay con qué planificar.
    // El backend deduce la carpeta de salida, el formato y los nombres; los capítulos
    // los lee él mismo del archivo.
    const planOptions = $derived.by(() => {
       if (!fileInfo?.path || !appConfig.baseFolder) return null;
-      if (segmentMode === "interval" && !(intervalMins > 0)) return null;
-      if (!useSubfolder && !outputFolder) return null;
+      if (segmentMode === "interval" && !(cfg.intervalMins > 0)) return null;
+      if (!cfg.useSubfolder && !outputFolder) return null;
       return {
          file_path: fileInfo.path,
          base_folder: appConfig.baseFolder,
          segment_mode: segmentMode,
          interval_seconds: segmentMode === "interval" ? intervalSeconds : null,
-         output_folder: useSubfolder ? null : outputFolder,
-         media_type: mediaType,
-         use_subfolder: useSubfolder,
+         output_folder: cfg.useSubfolder ? null : outputFolder,
+         media_type: cfg.mediaType,
+         use_subfolder: cfg.useSubfolder,
          duration_seconds: fileInfo.duration_seconds > 0 ? fileInfo.duration_seconds : null,
       };
    });
@@ -121,17 +109,18 @@ $effect(() => {
       return () => clearTimeout(timer);
    });
 
-   // ── Reset al cambiar tipo ────────────────────────────────────────────────────
+   // ── Cambio de tipo ───────────────────────────────────────────────────────────
 
-   $effect(() => {
-      mediaType;
+   // Al cambiar entre audio y video se descarta el archivo elegido y todo lo que dependía de él.
+   // Es una acción del usuario (onchange del selector) y no un efecto: así no se ejecuta al montar.
+   function resetForNewType() {
       fileInfo = null;
       chapters = [];
       hasChapters = false;
       segmentMode = "chapters";
       outputFolder = "";
       autoHint = "";
-   });
+   }
 
    // ── Carga ────────────────────────────────────────────────────────────────────
 
@@ -163,15 +152,15 @@ $effect(() => {
    }
 
    async function pickFile() {
-      const exts = appConfig.mediaExtensions[mediaType].map((ext) => "*" + ext);
-      const paths = await bridge.pick_files(exts, appConfig.baseFolder, mediaType);
+      const exts = appConfig.mediaExtensions[cfg.mediaType].map((ext) => "*" + ext);
+      const paths = await bridge.pick_files(exts, appConfig.baseFolder, cfg.mediaType);
       if (!paths.length) return;
 
       const info = await bridge.get_file_info(paths[0]);
       fileInfo = { ...info, path: paths[0] };
       autoHint = "";
 
-      if (mediaType === "audio") {
+      if (cfg.mediaType === "audio") {
          await loadChapters(paths[0]);
       } else {
          hasChapters = false;
@@ -211,27 +200,13 @@ $effect(() => {
       <main class="flex flex-1 flex-col items-center overflow-y-auto px-8 py-10">
          <div class="flex w-full max-w-md flex-col gap-5">
             <!-- Toggle Audio / Video -->
-            <div class="flex flex-col gap-1.5">
-               <span class="text-xs text-white/40">Tipo</span>
-               <div class="flex gap-2">
-                  {#each ["audio", "video"] as type (type)}
-                     <button
-                        class="flex-1 rounded-lg py-2 text-xs font-medium transition-colors
-                       {mediaType === type
-                           ? 'bg-indigo-600 text-white'
-                           : 'border border-white/10 bg-white/5 text-white/50 hover:text-white'}"
-                        onclick={() => (mediaType = type)}
-                     >
-                        {type === "audio" ? "🎵 Audio" : "🎬 Video"}
-                     </button>
-                  {/each}
-               </div>
-            </div>
+            <Field label="Tipo">
+               <SegmentedControl label="Tipo" options={MEDIA_TYPES} bind:value={cfg.mediaType} onchange={resetForNewType} fill />
+            </Field>
 
             <!-- Carpeta base (solo audio) -->
-            {#if mediaType === "audio"}
-               <div class="flex flex-col gap-1.5">
-                  <span class="text-xs text-white/40">Carpeta base</span>
+            {#if cfg.mediaType === "audio"}
+               <Field label="Carpeta base">
                   <button
                      class="flex items-center gap-2 rounded-lg border border-white/10
                      bg-white/5 px-3 py-2 text-xs text-left transition-all
@@ -243,7 +218,7 @@ $effect(() => {
                         {appConfig.baseFolder || "Sin seleccionar"}
                      </span>
                   </button>
-               </div>
+               </Field>
             {/if}
 
             <!-- Archivo -->
@@ -251,7 +226,7 @@ $effect(() => {
                <div class="flex items-center justify-between">
                   <span class="text-xs text-white/40">Archivo</span>
                   <button class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors" onclick={pickFile}>
-                     {mediaType === "audio" ? "Seleccionar manualmente" : "Seleccionar archivo"}
+                     {cfg.mediaType === "audio" ? "Seleccionar manualmente" : "Seleccionar archivo"}
                   </button>
                </div>
 
@@ -277,7 +252,7 @@ $effect(() => {
                      class="rounded-lg border border-dashed border-white/10 p-4
                         text-center text-xs text-white/20"
                   >
-                     {mediaType === "audio"
+                     {cfg.mediaType === "audio"
                         ? "Selecciona una carpeta base o elige manualmente"
                         : "Selecciona un archivo de video"}
                   </div>
@@ -285,8 +260,7 @@ $effect(() => {
             </div>
 
             <!-- Modo de segmentación — horizontal -->
-            <div class="flex flex-col gap-1.5">
-               <span class="text-xs text-white/40">Modo de segmentación</span>
+            <Field label="Modo de segmentación">
                <div class="flex gap-5">
                   <label
                      class="flex items-center gap-2
@@ -321,17 +295,16 @@ $effect(() => {
                      <span class="text-xs text-white/70">Intervalo fijo</span>
                   </label>
                </div>
-            </div>
+            </Field>
 
             <!-- Intervalo — input pequeño -->
             {#if segmentMode === "interval"}
-               <div class="flex flex-col gap-1.5">
-                  <label class="text-xs text-white/40" for="interval"> Intervalo (minutos) </label>
+               <Field label="Intervalo (minutos)" for="interval">
                   <div class="flex items-center gap-3">
                      <input
                         id="interval"
                         type="number"
-                        bind:value={intervalMins}
+                        bind:value={cfg.intervalMins}
                         min="1"
                         max="999"
                         class="w-20 rounded-lg border border-white/10 bg-white/5 px-3 py-2
@@ -344,38 +317,23 @@ $effect(() => {
                         </span>
                      {/if}
                   </div>
-               </div>
+               </Field>
             {/if}
 
             <!-- Toggle subcarpeta audios/parts o videos/parts -->
-            <div class="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2.5">
-               <div class="flex flex-col gap-0.5">
-                  <span class="text-xs text-white/70">
-                     Guardar en subcarpeta <code class="text-white/40">{outputSubfolder}/parts</code>
-                  </span>
-                  {#if plan}
-                     <span class="truncate text-[11px] text-white/30">{plan.output_dir}</span>
-                  {/if}
-               </div>
-               <button
-                  type="button"
-                  role="switch"
-                  aria-checked={useSubfolder}
-                  onclick={() => (useSubfolder = !useSubfolder)}
-                  class="relative h-5 w-9 shrink-0 rounded-full border-none p-0 transition-colors
-                     {useSubfolder ? 'bg-indigo-600' : 'bg-white/15'}"
-               >
-                  <span
-                     class="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform
-                        {useSubfolder ? 'translate-x-4' : 'translate-x-0'}"
-                  ></span>
-               </button>
-            </div>
+            <SwitchField
+               bind:checked={cfg.useSubfolder}
+               label="Guardar en subcarpeta {outputSubfolder}/parts"
+               description={plan?.output_dir}
+               size="sm"
+               class="rounded-lg border border-white/10 bg-white/5 px-3 py-2.5"
+            >
+               Guardar en subcarpeta <code class="text-white/40">{outputSubfolder}/parts</code>
+            </SwitchField>
 
             <!-- Carpeta de salida (solo si se desactiva la subcarpeta automática) -->
-            {#if !useSubfolder}
-               <div class="flex flex-col gap-1.5">
-                  <span class="text-xs text-white/40">Carpeta de salida</span>
+            {#if !cfg.useSubfolder}
+               <Field label="Carpeta de salida">
                   <button
                      class="flex items-center gap-2 rounded-lg border border-white/10
                      bg-white/5 px-3 py-2 text-xs text-left transition-all
@@ -387,7 +345,7 @@ $effect(() => {
                         {outputFolder || "Sin seleccionar"}
                      </span>
                   </button>
-               </div>
+               </Field>
             {/if}
 
             {#if planError}
