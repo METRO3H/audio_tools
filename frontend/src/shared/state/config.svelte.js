@@ -11,6 +11,7 @@
  *
  *   appConfig.baseFolder          // string — carpeta base actual
  *   appConfig.mediaExtensions     // { audio: ['.mp3', ...], video: ['.mp4', ...] } — del backend
+ *   appConfig.outputFormats       // { audio: ['mp3', ...], video: ['mp4', ...] } — del backend; el primero es el de por defecto
  *   appConfig.setBaseFolder(path) // actualiza la carpeta base
  *   await appConfig.init()        // carga config desde el backend
  */
@@ -23,6 +24,7 @@ export const appConfig = $state({
    baseFolder: "",
    defaultBaseFolder: "",
    mediaExtensions: { audio: [], video: [] },
+   outputFormats: { audio: [], video: [] },
    loaded: false,
 
    async init() {
@@ -31,6 +33,7 @@ export const appConfig = $state({
       this.defaultBaseFolder = cfg.default_base_folder;
       this.transcribeInitialPrompt = cfg.transcribe_initial_prompt ?? "";
       this.mediaExtensions = cfg.media_extensions ?? { audio: [], video: [] };
+      this.outputFormats = cfg.output_formats ?? { audio: [], video: [] };
       this.loaded = true;
    },
 

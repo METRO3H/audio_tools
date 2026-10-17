@@ -198,6 +198,17 @@
          </div>
       {/if}
 
+      <!-- Aviso del job (terminó bien, pero hay algo que el usuario debe saber) -->
+      {#if progress.warning}
+         <div
+            role="status"
+            class="shrink-0 rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3
+                   text-xs text-amber-300 break-words"
+         >
+            {progress.warning}
+         </div>
+      {/if}
+
       <!-- Lista de archivos -->
       <div
          class="flex-1 overflow-y-auto min-h-0"

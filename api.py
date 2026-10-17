@@ -42,22 +42,24 @@ tool son EXACTAMENTE los mismos en local y en remoto.
 """
 
 import json
+import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 import os
 import subprocess
-import sys
 
 import webview
 
 import config
-from core.actions.merge_audio import MergeAudioAction
+from core.actions.merge_audio import MergeAudioAction, resolve_merge
 from core.actions.diverge_audio import DivergeAudioAction, resolve_diverge
 from core.actions.audio_to_video import AudioToVideoAction, ENCODERS
 from core.transcription.transcribe_action import TranscribeAction
 from core.transcription.whisper_runner import WhisperRunner
 from core.ffmpeg_runner import FFmpegRunner
+from core import formats
 from core.jobs import (
     JobEvents,
     describe_error,
@@ -65,10 +67,12 @@ from core.jobs import (
     job_errors,
     job_id_from,
     run_ffmpeg_commands,
+    run_ffmpeg_single,
 )
+from core.process import NO_WINDOW
 from core.media_info import get_duration, get_chapters
 from core.models import (
-    MergeAudioConfig,
+    MergeOptions,
     DivergeOptions,
     AudioToVideoConfig,
     TranscribeConfig,
@@ -82,8 +86,8 @@ from core.translation import prompts as translation_prompts
 from util.image_optimizer import optimize_image, SUPPORTED_EXTS
 
 # — Constantes compartidas —————————————————————————————————————————————————
-_AUDIO_EXTS = {'.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus'}
-_VIDEO_EXTS = {'.mp4', '.mkv', '.avi', '.mov', '.webm'}
+_AUDIO_EXTS = formats.extensions("audio")
+_VIDEO_EXTS = formats.extensions("video")
 
 # — Helpers —————————————————————————————————————————————————————————————————
 
@@ -183,6 +187,7 @@ class AudioToolsAPI:
                 "audio": sorted(_AUDIO_EXTS),
                 "video": sorted(_VIDEO_EXTS),
             },
+            "output_formats": formats.as_config(),
         }
 
     def get_duration(self, file_path: str) -> float:
@@ -227,91 +232,78 @@ class AudioToolsAPI:
 
     # — Merge —————————————————————————————————————————————————————————————————
 
-    def run_merge(
-        self,
-        file_paths: list[str],
-        output_path: str,
-        base_folder: str,
-        durations: list[float],
-    ) -> None:
-        config_ = MergeAudioConfig(
-            input_files=_paths(file_paths),
-            output_file=Path(output_path),
-            base_folder=Path(base_folder),
+    def plan_merge(self, options: dict) -> dict:
+        """
+        Qué va a producir un merge, sin ejecutarlo: ruta de salida, lista efectiva
+        de archivos (ya sin el merge anterior, si estaba entre las entradas), sus
+        duraciones y los capítulos. Es la misma planificación que usa run_merge.
+
+        Opciones (claves snake_case; ver core/models.py::MergeOptions): las mismas
+        que run_merge, sin job_id. Conviene enviar `durations` (ya conocidas por el
+        frontend) para no lanzar ffprobe en cada consulta.
+
+        Nunca lanza: devuelve {"error": "mensaje"} si algo falla; si todo va bien,
+            {
+              "output_path": str, "output_name": str,
+              "files": [{index, name, path, duration, start, end}, ...],
+              "excluded": [str, ...],
+              "total_duration": float,
+              "chapters": [{index, title, start, end}, ...]
+            }
+        No crea carpetas ni escribe nada.
+        """
+        try:
+            opts = MergeOptions.from_dict(options)
+            inputs = resolve_merge(opts, lambda path: get_duration(config.FFPROBE_BIN, path))
+            return MergeAudioAction().plan(inputs.config, inputs.durations).to_dict()
+        except Exception as exc:  # noqa: BLE001 - el frontend solo necesita el mensaje
+            return {"error": describe_error(exc)}
+
+    def run_merge(self, options: dict) -> None:
+        """
+        Une varios archivos en uno, con un capítulo por archivo de origen. Retorna
+        de inmediato: el avance llega por los eventos audiotools:start/log/progress/
+        done (todos con job_id). Cualquier error llega como audiotools:done con
+        success=false y error, nunca como excepción.
+
+        Si lo único que falla es la incrustación de capítulos, el job termina con
+        éxito y `done` trae un `warning`.
+
+        Opciones (claves snake_case): ver core/models.py::MergeOptions, más job_id
+        (generado por el frontend). La salida se escribe junto al primer archivo.
+        """
+        events = JobEvents(
+            lambda event, detail: _emit(self._window, event, detail),
+            tool="merge",
+            job_id=job_id_from(options),
         )
-        action = MergeAudioAction()
-        args = action.build_args(config_)
-        total_duration = sum(durations)
+        with job_errors(events):
+            opts = MergeOptions.from_dict(options)
+            inputs = resolve_merge(opts, lambda path: get_duration(config.FFPROBE_BIN, path))
+            action = MergeAudioAction()
+            plan = action.plan(inputs.config, inputs.durations)
 
-        # Inferencia de archivo activo basada en tiempo acumulado
-        active_idx = [0]
-        accumulated = [0.0]  # tiempo acumulado antes del archivo activo
-
-        def on_log(msg: str):
-            _emit(self._window, "audiotools:log", {"message": msg})
-
-        def on_progress(value: float):
-            # value = elapsed_global / total_duration (0..1)
-            elapsed = value * total_duration
-
-            # Determinar qué archivo está siendo procesado
-            acc = 0.0
-            for i, dur in enumerate(durations):
-                if elapsed < acc + dur:
-                    active_idx[0] = i
-                    accumulated[0] = acc
-                    break
-                acc += dur
-            else:
-                active_idx[0] = len(durations) - 1
-                accumulated[0] = total_duration - durations[-1]
-
-            # Progreso individual del archivo activo
-            file_dur = durations[active_idx[0]]
-            file_elapsed = elapsed - accumulated[0]
-            file_progress = min(file_elapsed / file_dur,
-                                1.0) if file_dur > 0 else 0.0
-
-            # Archivos completados = todos los anteriores al activo
-            completed = active_idx[0]
-
-            _emit(self._window, "audiotools:progress", {
-                "value": value,
-                "file_index": active_idx[0],
-                "file_progress": file_progress,
-                "completed": completed,
-                "total": len(durations),
-            })
-
-        def on_done(success: bool):
-            if success:
-                action.add_chapters(
-                    output_file=Path(output_path),
-                    input_files=_paths(file_paths),
-                    durations=durations,
-                    ffmpeg_bin=config.FFMPEG_BIN,
+            if plan.excluded:
+                events.log(
+                    f"[AVISO] Se excluyó el archivo merged anterior de los inputs ({len(plan.excluded)} archivo(s))."
                 )
-            else:
-                # Elimina el archivo de salida incompleto si el proceso fue cancelado
-                out = Path(output_path)
-                if out.exists():
-                    try:
-                        out.unlink()
-                    except Exception:
-                        pass
-            action.cleanup()
-            _emit(self._window, "audiotools:done", {
-                "success": success,
-                "cancelled": job_cancelled(self._ffmpeg, success),
-            })
 
-        self._ffmpeg.run(
-            args=args,
-            on_log=on_log,
-            on_done=on_done,
-            on_progress=on_progress,
-            duration=total_duration,
-        )
+            workdir = Path(tempfile.mkdtemp(prefix="audiotools_merge_"))
+            try:
+                command = action.build_command(plan, workdir)
+                run_ffmpeg_single(
+                    self._ffmpeg,
+                    command,
+                    events,
+                    item_durations=[f.duration for f in plan.files],
+                    finalize=lambda success: action.finalize(
+                        plan, success, config.FFMPEG_BIN, workdir,
+                        probe_duration=lambda path: get_duration(config.FFPROBE_BIN, path),
+                    ),
+                )
+            except BaseException:
+                shutil.rmtree(workdir, ignore_errors=True)  # el job no llegó a arrancar
+                raise
 
     # — Diverge ———————————————————————————————————————————————————————————————
 
@@ -762,7 +754,7 @@ class AudioToolsAPI:
                     ],
                     capture_output=True,
                     timeout=5,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    creationflags=NO_WINDOW,
                 )
                 available[key] = result.returncode == 0
             except Exception as e:

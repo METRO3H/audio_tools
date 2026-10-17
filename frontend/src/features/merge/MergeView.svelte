@@ -3,59 +3,51 @@
    import { progress } from "@shared/state/progress.svelte.js";
    import { appConfig } from "@shared/state/config.svelte.js";
    import { basename, folderName } from "@shared/utils.js";
-   import { persistentConfig } from "@shared/services/persistentConfig.js";
+   import { useToolRun } from "@shared/state/useToolRun.svelte.js";
+   import { persisted } from "@shared/state/persisted.svelte.js";
+   import { usePlan } from "@shared/state/usePlan.svelte.js";
    import ProcessingView from "@shared/components/ProcessingView.svelte";
    import ViewHeader from "@shared/components/ViewHeader.svelte";
 
    let { goHome } = $props();
 
-   const AUDIO_FORMATS = ["mp3", "wav", "aac", "m4a", "ogg", "flac", "opus"];
-   const VIDEO_FORMATS = ["mp4", "mkv", "avi", "mov", "webm"];
-   const AUDIO_EXTS = ["*.mp3", "*.wav", "*.m4a", "*.aac", "*.ogg", "*.flac", "*.opus"];
-   const VIDEO_EXTS = ["*.mp4", "*.mkv", "*.avi", "*.mov", "*.webm"];
+   const job = useToolRun("run_merge");
 
    // ── Estado ──────────────────────────────────────────────────────────────────
 
-   let mediaType = $state("audio");
-   let outputFormat = $state("mp3");
-   let processing = $state(false);
+   // Preferencias que se recuerdan entre sesiones. El formato guardado se respeta: solo se
+   // restablece cuando el USUARIO cambia el tipo (changeMediaType), nunca al montar.
+   const cfg = persisted("merge_config", { mediaType: "audio", outputFormat: "mp3" });
+
    let fileInfos = $state([]);
    let outputName = $state("");
    let autoHint = $state("");
 
    // ── Derivados ────────────────────────────────────────────────────────────────
 
-   const formats = $derived(mediaType === "audio" ? AUDIO_FORMATS : VIDEO_FORMATS);
-   const exts = $derived(mediaType === "audio" ? AUDIO_EXTS : VIDEO_EXTS);
+   const formatOptions = $derived(appConfig.outputFormats[cfg.mediaType] ?? []);
 
-   // ── Cargar configuración guardada ────────────────────────────────────────────
-$effect(() => {
-  const saved = persistentConfig.get('merge_config');
-  if (saved) {
-    mediaType = saved.mediaType ?? "audio";
-    outputFormat = saved.outputFormat ?? "mp3";
-  }
-});
+   // Si lo guardado no es válido para el tipo actual (config manipulada o corrupta), se usa el primero.
+   const outputFormat = $derived(formatOptions.includes(cfg.outputFormat) ? cfg.outputFormat : (formatOptions[0] ?? ""));
 
-// ── Guardar configuración al cambiar ────────────────────────────────────────
-$effect(() => {
-  persistentConfig.set('merge_config', {
-    mediaType,
-    outputFormat,
-  });
-});
+   const effectiveName = $derived(outputName.trim() || folderName(appConfig.baseFolder));
 
-   // Al cambiar tipo, resetea formato y archivos
-   $effect(() => {
-      outputFormat = mediaType === "audio" ? "mp3" : "mp4";
+   // ── Cambio de tipo ───────────────────────────────────────────────────────────
+
+   // Al cambiar entre audio y video se restablece el formato y se descartan los archivos.
+   // Es una acción del usuario y no un efecto: así no corre al montar ni pisa lo guardado.
+   function changeMediaType(type) {
+      if (type === cfg.mediaType) return;
+      cfg.mediaType = type;
+      cfg.outputFormat = appConfig.outputFormats[type]?.[0] ?? "";
       fileInfos = [];
       autoHint = "";
-   });
+   }
 
    // ── Carga de archivos ────────────────────────────────────────────────────────
 
    async function loadMedia(folder) {
-      const result = await bridge.scan_media_folder(folder, mediaType);
+      const result = await bridge.scan_media_folder(folder, cfg.mediaType);
       if (result.error) {
          fileInfos = [];
          autoHint = `⚠ ${result.error}`;
@@ -63,7 +55,7 @@ $effect(() => {
       }
       if (!result.files.length) {
          fileInfos = [];
-         autoHint = `⚠ No se encontraron archivos en ./${mediaType === "audio" ? "audios" : "videos"}`;
+         autoHint = `⚠ No se encontraron archivos en ./${cfg.mediaType === "audio" ? "audios" : "videos"}`;
          return;
       }
       const infos = await Promise.all(result.files.map((p) => bridge.get_file_info(p)));
@@ -75,7 +67,8 @@ $effect(() => {
    // ── Selección manual ─────────────────────────────────────────────────────────
 
    async function pickFiles() {
-      const paths = await bridge.pick_files(exts, appConfig.baseFolder, mediaType);
+      const exts = (appConfig.mediaExtensions[cfg.mediaType] ?? []).map((ext) => "*" + ext);
+      const paths = await bridge.pick_files(exts, appConfig.baseFolder, cfg.mediaType);
       if (!paths.length) return;
       const infos = await Promise.all(paths.map((p) => bridge.get_file_info(p)));
       fileInfos = infos.map((info, i) => ({ ...info, path: paths[i] }));
@@ -95,46 +88,64 @@ $effect(() => {
       fileInfos = fileInfos.filter((f) => f.path !== path);
    }
 
-   // ── Output ───────────────────────────────────────────────────────────────────
+   // ── Plan ─────────────────────────────────────────────────────────────────────
 
-   function getOutputPath() {
-      if (!fileInfos.length) return "";
-      const name = outputName || folderName(appConfig.baseFolder);
-      const mediaDir = fileInfos[0].path.substring(0, fileInfos[0].path.lastIndexOf("\\") + 1);
-      return `${mediaDir}${name}.${outputFormat}`;
-   }
+   // Opciones que se le envían al backend, o null si todavía no hay con qué planificar.
+   // El backend decide dónde queda el resultado (junto al primer archivo), limpia el nombre
+   // y descarta de la lista el merge anterior si estaba entre las entradas.
+   const planOptions = $derived.by(() => {
+      if (fileInfos.length < 2 || !effectiveName || !outputFormat) return null;
+      return {
+         file_paths: fileInfos.map((f) => f.path),
+         output_name: effectiveName,
+         output_format: outputFormat,
+         media_type: cfg.mediaType,
+         durations: fileInfos.map((f) => (f.duration_seconds > 0 ? f.duration_seconds : null)),
+      };
+   });
+
+   // plan = { output_path, output_name, files, excluded, total_duration, chapters } | null
+   const planState = usePlan(() => planOptions, (options) => bridge.plan_merge(options));
+   const plan = $derived(planState.value);
+   const planError = $derived(planState.error);
+   const planPending = $derived(planState.pending);
+
+   const excludedNames = $derived((plan?.excluded ?? []).map((path) => basename(path)));
+
+   // Filas de ProcessingView: los archivos que REALMENTE se unen (sin el merge anterior).
+   const processingFiles = $derived.by(() => {
+      const sizeByPath = new Map(fileInfos.map((f) => [f.path, f.size_mb]));
+      return (plan?.files ?? []).map((f) => ({
+         name: f.name,
+         size_mb: sizeByPath.get(f.path) ?? 0,
+         duration_seconds: f.duration,
+         path: f.path,
+      }));
+   });
 
    // ── Validación ───────────────────────────────────────────────────────────────
 
-   const canRun = $derived(fileInfos.length >= 2 && !!appConfig.baseFolder && !progress.running);
+   // No se puede ejecutar mientras haya una consulta de plan en vuelo: el plan que se ve
+   // podría no corresponder todavía a lo que el usuario acaba de cambiar.
+   const canRun = $derived(!!plan && !planPending && !progress.running);
 
    // ── Ejecutar ─────────────────────────────────────────────────────────────────
 
    async function run() {
       if (!canRun) return;
-      progress.reset();
-      processing = true;
-      progress.running = true;
-
-      const outPath = getOutputPath();
-      const durations = fileInfos.map((f) => f.duration_seconds);
-      const paths = fileInfos.map((f) => f.path);
-
-      await bridge.run_merge(paths, outPath, appConfig.baseFolder, durations);
-   }
-
-   function cancel() {
-      bridge.cancel();
-   }
-
-   function goBack() {
-      processing = false;
-      progress.reset();
+      await job.start(planOptions);
    }
 </script>
 
-{#if processing}
-   <ProcessingView title="Merge" {goHome} {fileInfos} outputPath={getOutputPath()} onCancel={cancel} onBack={goBack} />
+{#if job.processing}
+   <ProcessingView
+      title="Merge"
+      {goHome}
+      fileInfos={processingFiles}
+      outputPath={plan?.output_path ?? ""}
+      onCancel={job.cancel}
+      onBack={job.back}
+   />
 {:else}
    <div class="flex h-full flex-col">
       <ViewHeader title="Merge" {goHome} />
@@ -148,10 +159,10 @@ $effect(() => {
                   {#each ["audio", "video"] as type (type)}
                      <button
                         class="flex-1 rounded-lg py-2 text-xs font-medium transition-colors
-                       {mediaType === type
+                       {cfg.mediaType === type
                            ? 'bg-indigo-600 text-white'
                            : 'border border-white/10 bg-white/5 text-white/50 hover:text-white'}"
-                        onclick={() => (mediaType = type)}
+                        onclick={() => changeMediaType(type)}
                      >
                         {type === "audio" ? "🎵 Audio" : "🎬 Video"}
                      </button>
@@ -221,7 +232,7 @@ $effect(() => {
                         text-center text-xs text-white/20"
                   >
                      {appConfig.baseFolder
-                        ? `No se encontraron ${mediaType === "audio" ? "audios en ./audios" : "videos en ./videos"}`
+                        ? `No se encontraron ${cfg.mediaType === "audio" ? "audios en ./audios" : "videos en ./videos"}`
                         : "Selecciona una carpeta base primero"}
                   </div>
                {/if}
@@ -240,21 +251,30 @@ $effect(() => {
                      focus:border-indigo-500/50 transition-colors"
                   />
                   <select
-                     bind:value={outputFormat}
+                     value={outputFormat}
+                     onchange={(e) => (cfg.outputFormat = e.currentTarget.value)}
+                     aria-label="Formato de salida"
                      class="rounded-lg border border-white/10 bg-zinc-900 px-2 py-2
                      text-xs text-white/70 outline-none focus:border-indigo-500/50"
                   >
-                     {#each formats as fmt (fmt)}
+                     {#each formatOptions as fmt (fmt)}
                         <option value={fmt}>{fmt}</option>
                      {/each}
                   </select>
                </div>
-               {#if fileInfos.length && appConfig.baseFolder}
-                  <span class="text-xs text-white/20 truncate">
-                     → {basename(getOutputPath())}
+               {#if plan}
+                  <span class="text-xs text-white/20 truncate">→ {plan.output_name}</span>
+               {/if}
+               {#if excludedNames.length}
+                  <span class="text-xs text-yellow-400">
+                     Se excluirá del merge: {excludedNames.join(", ")} (es el archivo de salida)
                   </span>
                {/if}
             </div>
+
+            {#if planError}
+               <span role="alert" class="text-xs text-red-400 break-words">{planError}</span>
+            {/if}
 
             <!-- Botón -->
             <button

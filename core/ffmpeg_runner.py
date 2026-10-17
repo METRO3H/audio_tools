@@ -2,6 +2,7 @@ import re
 import subprocess
 import threading
 from typing import Callable
+from core.process import NO_WINDOW
 
 
 class FFmpegRunner:
@@ -74,7 +75,7 @@ class FFmpegRunner:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                creationflags=subprocess.CREATE_NO_WINDOW,
+                creationflags=NO_WINDOW,
             )
             for line in self._process.stdout:
                 line = line.rstrip()

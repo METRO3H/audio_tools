@@ -11,7 +11,9 @@ from core.jobs import (
     job_cancelled,
     job_errors,
     job_id_from,
+    locate_progress,
     run_ffmpeg_commands,
+    run_ffmpeg_single,
 )
 
 
@@ -281,3 +283,152 @@ def test_cancel_between_files_is_also_cancelled(monkeypatch):
 def test_cancel_arriving_after_the_last_command_is_still_a_success(monkeypatch):
     log, _ = run_and_cancel_during(monkeypatch, cancel_on_call=2, outcomes=[True, True])
     assert log[-1][1]["success"] is True and log[-1][1]["cancelled"] is False
+
+
+# ── warning ──────────────────────────────────────────────────────────────
+
+
+def test_done_includes_warning_only_when_given():
+    log, emit = recorder()
+    ev = JobEvents(emit, tool="merge", job_id="j1")
+    ev.done(True)
+    ev.done(True, warning="No se pudieron incrustar los capítulos")
+    assert "warning" not in log[0][1]
+    assert log[1][1] == {
+        "job_id": "j1", "tool": "merge", "success": True, "cancelled": False,
+        "warning": "No se pudieron incrustar los capítulos",
+    }
+
+
+# ── locate_progress (un comando, varios elementos) ───────────────────────
+
+
+@pytest.mark.parametrize(
+    "durations, value, expected",
+    [
+        ([10, 5], 0.0, (0, 0.0, 0)),
+        ([10, 5], 0.5, (0, 0.75, 0)),                 # 7.5 s: va por el 75 % del primero
+        ([10, 5], 10 / 15, (1, 0.0, 1)),              # justo en la frontera: ya es el segundo
+        ([10, 5], 0.8, (1, 0.4, 1)),                  # 12 s: 2 s del segundo (5 s)
+        ([10, 5], 1.0, (1, 1.0, 1)),                  # al final, `completed` es el índice activo (N-1)
+        ([10], 0.5, (0, 0.5, 0)),                     # un solo elemento
+        ([3, 3, 3], 0.5, (1, 0.5, 1)),
+        ([0, 0], 0.7, (1, 0.0, 1)),                   # duraciones desconocidas: sin dividir entre cero
+    ],
+)
+def test_locate_progress(durations, value, expected):
+    active, progress, completed = locate_progress(durations, value)
+    assert active == expected[0] and completed == expected[2]
+    assert progress == pytest.approx(expected[1])
+
+
+def test_locate_progress_never_goes_past_the_last_element_or_100_percent():
+    active, progress, _ = locate_progress([4, 6], 1.7)  # un avance mayor que 1 no debe romper nada
+    assert active == 1 and progress == 1.0
+
+
+# ── run_ffmpeg_single ────────────────────────────────────────────────────
+
+
+def single_command():
+    return FfmpegCommand(args=["-i", "x", "out.mp3"], duration=15.0, label="out.mp3")
+
+
+def run_single(monkeypatch, outcome, items=(10.0, 5.0), finalize=None, cancel=False, progress=(0.5, 1.0)):
+    """FFmpegRunner real (hilo incluido); solo se sustituye el lanzamiento de ffmpeg."""
+    runner = FFmpegRunner("ffmpeg")
+    seen = {}
+
+    def fake_run_single(args, on_log, on_progress=None, duration=None):
+        seen.update(args=args, duration=duration)
+        on_log("ffmpeg -> out.mp3")
+        for value in progress:
+            on_progress(value)
+        if cancel:
+            runner.cancel()
+        return outcome
+
+    monkeypatch.setattr(runner, "_run_single", fake_run_single)
+    log = []
+    finished = threading.Event()
+
+    def emit(name, detail):
+        log.append((name, detail))
+        if name == "audiotools:done":
+            finished.set()
+
+    run_ffmpeg_single(runner, single_command(), JobEvents(emit, "merge", "job-1"), list(items), finalize)
+    assert finished.wait(5), "el job no terminó"
+    return log, seen
+
+
+def test_single_command_event_sequence_and_arguments(monkeypatch):
+    log, seen = run_single(monkeypatch, True)
+    assert seen == {"args": ["-i", "x", "out.mp3"], "duration": 15.0}
+    assert log[0] == ("audiotools:start", {"job_id": "job-1", "tool": "merge", "total": 2})
+    assert all(d["job_id"] == "job-1" for _, d in log)
+
+    progress = [d for n, d in log if n == "audiotools:progress"]
+    # 0.5 de 15 s = 7.5 s -> archivo 1 al 75 %; 1.0 -> archivo 2 completo. El runner añade siempre
+    # un 1.0 final cuando ffmpeg termina bien, de ahí el tercer evento.
+    assert [(p["file_index"], round(p["file_progress"], 2), p["completed"], p["total"]) for p in progress] == [
+        (0, 0.75, 0, 2), (1, 1.0, 1, 2), (1, 1.0, 1, 2),
+    ]
+    assert [p["value"] for p in progress] == [0.5, 1.0, 1.0]
+    assert log[-1] == ("audiotools:done", {"job_id": "job-1", "tool": "merge", "success": True, "cancelled": False})
+
+
+def test_finalize_runs_before_done_and_receives_the_outcome(monkeypatch):
+    order = []
+
+    def finalize(success):
+        order.append(("finalize", success))
+
+    runner_log, _ = run_single(monkeypatch, True, finalize=finalize)
+    order.append(("done", runner_log[-1][1]["success"]))
+    assert order == [("finalize", True), ("done", True)]
+
+
+def test_a_text_returned_by_finalize_becomes_a_warning_on_a_successful_job(monkeypatch):
+    log, _ = run_single(monkeypatch, True, finalize=lambda ok: "no se pudieron incrustar los capítulos")
+    done = log[-1][1]
+    assert done["success"] is True and done["warning"] == "no se pudieron incrustar los capítulos"
+
+
+def test_a_crashing_finalize_still_emits_done_with_a_warning(monkeypatch):
+    def finalize(success):
+        raise RuntimeError("boom")
+
+    log, _ = run_single(monkeypatch, True, finalize=finalize)
+    done = log[-1][1]
+    assert done["success"] is True and done["warning"] == "RuntimeError: boom"
+
+
+def test_failure_calls_finalize_with_false_and_reports_no_error_text(monkeypatch):
+    seen = []
+    log, _ = run_single(monkeypatch, False, finalize=lambda ok: seen.append(ok))
+    done = log[-1][1]
+    assert seen == [False]
+    assert done["success"] is False and done["cancelled"] is False and "error" not in done and "warning" not in done
+
+
+def test_cancellation_is_reported_as_cancelled(monkeypatch):
+    seen = []
+    log, _ = run_single(monkeypatch, False, finalize=lambda ok: seen.append(ok), cancel=True)
+    done = log[-1][1]
+    assert done["success"] is False and done["cancelled"] is True
+    assert seen == [False]
+
+
+def test_cancel_arriving_after_a_successful_run_is_still_a_success(monkeypatch):
+    log, _ = run_single(monkeypatch, True, cancel=True)
+    assert log[-1][1]["success"] is True and log[-1][1]["cancelled"] is False
+
+
+def test_no_items_is_an_error_not_a_silent_success():
+    log, emit = recorder()
+    events = JobEvents(emit, "merge", "j1")
+    with job_errors(events):
+        run_ffmpeg_single(object(), single_command(), events, [])
+    assert names(log) == ["audiotools:log", "audiotools:done"]
+    assert log[1][1]["error"] == "No hay nada que procesar."

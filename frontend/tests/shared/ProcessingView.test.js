@@ -96,6 +96,28 @@ describe("ProcessingView: cancelación", () => {
       expect(statusSpan("Completado").className).toContain("text-emerald-400");
    });
 
+   it("done con warning: el job se ve Completado y el aviso aparece en ámbar, no como error", async () => {
+      mount();
+      emit("audiotools:done", {
+         job_id: "J1", success: true, cancelled: false,
+         warning: "No se pudieron incrustar los capítulos: sin permiso",
+      });
+      await flush();
+
+      expect(statusSpan("Completado").className).toContain("text-emerald-400");
+      const warning = screen.getByRole("status");
+      expect(warning.textContent).toContain("No se pudieron incrustar los capítulos");
+      expect(warning.className).toContain("text-amber-300");
+      expect(screen.queryByRole("alert")).toBeNull();
+   });
+
+   it("sin warning no hay recuadro de aviso", async () => {
+      mount();
+      emit("audiotools:done", { job_id: "J1", success: true, cancelled: false });
+      await flush();
+      expect(screen.queryByRole("status")).toBeNull();
+   });
+
    it("el job termina bien aunque se haya pulsado Cancelar: no queda como cancelado", async () => {
       mount();
       cancelButton().click();

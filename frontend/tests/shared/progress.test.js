@@ -49,6 +49,32 @@ describe("progress store: eventos del job actual", () => {
    });
 });
 
+describe("progress store: aviso (warning)", () => {
+   it("un done con warning lo guarda, sin ser un error", () => {
+      emit("audiotools:done", { job_id: "J1", success: true, cancelled: false, warning: "No se pudieron incrustar los capítulos" });
+      expect(progress.success).toBe(true);
+      expect(progress.warning).toBe("No se pudieron incrustar los capítulos");
+      expect(progress.error).toBeNull();
+   });
+
+   it("un done sin warning lo deja en null", () => {
+      emit("audiotools:done", { job_id: "J1", success: true });
+      expect(progress.warning).toBeNull();
+   });
+
+   it("reset() lo limpia", () => {
+      emit("audiotools:done", { job_id: "J1", success: true, warning: "algo" });
+      progress.reset();
+      expect(progress.warning).toBeNull();
+   });
+
+   it("el warning de OTRO job se descarta", () => {
+      emit("audiotools:done", { job_id: "otro", success: true, warning: "viejo" });
+      expect(progress.warning).toBeNull();
+      expect(progress.running).toBe(true);
+   });
+});
+
 describe("progress store: eventos de otro job", () => {
    it("se descartan log, progress y done", () => {
       emit("audiotools:log", { job_id: "otro", message: "rezagado" });

@@ -1,103 +1,11 @@
-"""Construcción de comandos y metadatos de ffmpeg (merge, audio→video, chapters)."""
+"""Construcción de comandos de ffmpeg (audio→video) y lógica pura del FFmpegRunner."""
 from pathlib import Path
 
 import pytest
 
 from core.actions.audio_to_video import AudioToVideoAction
-from core.actions.merge_audio import MergeAudioAction
 from core.ffmpeg_runner import FFmpegRunner
-from core.models import AudioToVideoConfig, MergeAudioConfig
-from core.translation.chapters_runner import ChaptersTranslateRunner
-
-
-# ── Merge ────────────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def in_tmp(tmp_path, monkeypatch):
-    # Merge y chapters escriben archivos temporales relativos al CWD.
-    monkeypatch.chdir(tmp_path)
-    return tmp_path
-
-
-def merge_config(tmp_path, names=("a.mp3", "b.mp3", "c.mp3"), output="merged.mp3"):
-    return MergeAudioConfig(
-        input_files=[tmp_path / n for n in names],
-        output_file=tmp_path / output,
-        base_folder=tmp_path,
-    )
-
-
-def test_merge_build_args_and_concat_list(in_tmp):
-    cfg = merge_config(in_tmp)
-    args = MergeAudioAction().build_args(cfg)
-    assert args == ["-y", "-f", "concat", "-safe", "0", "-i", "_concat_list.txt", str(cfg.output_file)]
-    lines = (in_tmp / "_concat_list.txt").read_text(encoding="utf-8").splitlines()
-    assert lines == [f"file '{(in_tmp / n).as_posix()}'" for n in ("a.mp3", "b.mp3", "c.mp3")]
-
-
-def test_merge_concat_list_escapes_single_quotes(in_tmp):
-    cfg = merge_config(in_tmp, names=("it's.mp3", "b.mp3"))
-    MergeAudioAction().build_args(cfg)
-    first = (in_tmp / "_concat_list.txt").read_text(encoding="utf-8").splitlines()[0]
-    assert first == f"file '{(in_tmp / 'it').as_posix()}'\\''s.mp3'"
-
-
-def test_merge_excludes_previous_output_from_inputs_and_logs_it(in_tmp):
-    cfg = merge_config(in_tmp, names=("a.mp3", "b.mp3", "merged.mp3"))
-    logs = []
-    MergeAudioAction().build_args(cfg, on_log=logs.append)
-    content = (in_tmp / "_concat_list.txt").read_text(encoding="utf-8")
-    assert "merged.mp3" not in content
-    assert logs and "excluyó" in logs[0]
-
-
-def test_merge_requires_at_least_two_inputs(in_tmp):
-    cfg = merge_config(in_tmp, names=("a.mp3", "merged.mp3"))
-    with pytest.raises(ValueError):
-        MergeAudioAction().build_args(cfg)
-
-
-def test_merge_cleanup_removes_temp_files(in_tmp):
-    action = MergeAudioAction()
-    action.build_args(merge_config(in_tmp))
-    action._write_metadata([in_tmp / "a.mp3"], [1.0])
-    action.cleanup()
-    assert not (in_tmp / "_concat_list.txt").exists()
-    assert not (in_tmp / "_merge_metadata.txt").exists()
-
-
-EXPECTED_METADATA = (
-    ";FFMETADATA1\n\n"
-    "[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=10500\ntitle=a\n\n"
-    "[CHAPTER]\nTIMEBASE=1/1000\nSTART=10500\nEND=15500\ntitle=b\n"
-)
-
-
-def test_merge_metadata_format(in_tmp):
-    MergeAudioAction()._write_metadata([in_tmp / "a.mp3", in_tmp / "b.mp3"], [10.5, 5.0])
-    assert (in_tmp / "_merge_metadata.txt").read_text(encoding="utf-8") == EXPECTED_METADATA
-
-
-def test_chapters_translate_metadata_has_same_format_as_merge(in_tmp):
-    """
-    Hoy son dos implementaciones separadas del mismo formato FFMETADATA1.
-    Este test fija que producen el mismo texto, para poder unificarlas sin
-    cambiar el resultado.
-    """
-    chapters = [
-        {"index": 1, "title": "a", "start": 0.0, "end": 10.5},
-        {"index": 2, "title": "b", "start": 10.5, "end": 15.5},
-    ]
-    runner = ChaptersTranslateRunner()
-    runner._write_metadata(chapters, ["a", "b"])
-    assert (in_tmp / "_chapters_translate_metadata.txt").read_text(encoding="utf-8") == EXPECTED_METADATA
-
-
-def test_chapters_translate_metadata_flattens_newlines_in_titles(in_tmp):
-    runner = ChaptersTranslateRunner()
-    runner._write_metadata([{"index": 1, "title": "x", "start": 0, "end": 1}], ["  two\nlines  "])
-    assert "title=two lines\n" in (in_tmp / "_chapters_translate_metadata.txt").read_text(encoding="utf-8")
+from core.models import AudioToVideoConfig
 
 
 # ── Audio → Video ────────────────────────────────────────────────────────

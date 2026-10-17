@@ -7,6 +7,7 @@
    import { formatDuration } from "@shared/utils.js";
    import { useToolRun } from "@shared/state/useToolRun.svelte.js";
    import { persisted } from "@shared/state/persisted.svelte.js";
+   import { usePlan } from "@shared/state/usePlan.svelte.js";
    import Field from "@shared/ui/Field.svelte";
    import SegmentedControl from "@shared/ui/SegmentedControl.svelte";
    import SwitchField from "@shared/ui/SwitchField.svelte";
@@ -31,12 +32,6 @@
    let segmentMode = $state("chapters");
    let outputFolder = $state("");
    let autoHint = $state("");
-
-   // Plan que calcula el backend (nombres, rutas y duraciones de los segmentos).
-   // Es la única fuente: lo que se muestra aquí es exactamente lo que se ejecutará.
-   let plan = $state(null); // { output_dir, segments: [{ index, name, start, end, duration, output }] } | null
-   let planError = $state("");
-   let planPending = $state(false);
 
 
    // ── Derivados ────────────────────────────────────────────────────────────────
@@ -74,40 +69,15 @@
    // ve podría no corresponder todavía a lo que el usuario acaba de cambiar.
    const canRun = $derived(!!fileInfo && !!plan && !planPending && !progress.running);
 
-   // ── Plan (con debounce) ──────────────────────────────────────────────────────
+   // ── Plan ─────────────────────────────────────────────────────────────────────
 
-   const PLAN_DEBOUNCE_MS = 200;
-   let planSeq = 0;
-
-   $effect(() => {
-      const options = planOptions;
-      const seq = ++planSeq;
-
-      if (!options) {
-         plan = null;
-         planError = "";
-         planPending = false;
-         return;
-      }
-
-      planPending = true;
-      const timer = setTimeout(async () => {
-         const result = await bridge
-            .plan_diverge(options)
-            .catch((err) => ({ error: err instanceof Error ? err.message : String(err) }));
-         if (seq !== planSeq) return; // llegó tarde: ya hay una consulta más reciente
-         planPending = false;
-         if (result?.error) {
-            plan = null;
-            planError = result.error;
-         } else {
-            plan = result;
-            planError = "";
-         }
-      }, PLAN_DEBOUNCE_MS);
-
-      return () => clearTimeout(timer);
-   });
+   // Plan que calcula el backend (nombres, rutas y duraciones de los segmentos).
+   // Es la única fuente: lo que se muestra aquí es exactamente lo que se ejecutará.
+   // plan = { output_dir, segments: [{ index, name, start, end, duration, output }] } | null
+   const planState = usePlan(() => planOptions, (options) => bridge.plan_diverge(options));
+   const plan = $derived(planState.value);
+   const planError = $derived(planState.error);
+   const planPending = $derived(planState.pending);
 
    // ── Cambio de tipo ───────────────────────────────────────────────────────────
 

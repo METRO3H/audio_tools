@@ -8,7 +8,7 @@
  *   audiotools:progress  { value: float 0..1, ... }
  *   audiotools:log       { message: string }
  *   audiotools:file      { index: int, done: bool, started_at?: float, elapsed?: float }
- *   audiotools:done      { success: bool, cancelled?: bool, elapsed?: float, error?: string }
+ *   audiotools:done      { success: bool, cancelled?: bool, elapsed?: float, error?: string, warning?: string }
  *
  * Las tools migradas al contrato agregan `job_id` a cada evento. Si el evento
  * trae job_id y no coincide con `progress.jobId` (p. ej. el `done` rezagado de
@@ -24,6 +24,7 @@
  *   progress.success    // bool | null (null = en curso)
  *   progress.error      // string | null (mensaje cuando el job falla)
  *   progress.cancelled  // bool (true = terminó porque el usuario lo canceló; no es un error)
+ *   progress.warning    // string | null (el job terminó bien, pero con algo que el usuario debe saber)
  *   progress.jobId      // string | null (lo asigna useToolRun)
  *   progress.files      // { index: int, done: bool }[]
  *   progress.reset()    // limpia para una nueva operación
@@ -46,6 +47,7 @@ export const progress = $state({
    jobId: null,
    error: null,
    cancelled: false,
+   warning: null,
 
    reset() {
       this.value = 0;
@@ -62,6 +64,7 @@ export const progress = $state({
       this.jobId = null;
       this.error = null;
       this.cancelled = false;
+      this.warning = null;
    },
 });
 
@@ -114,6 +117,7 @@ if (typeof window !== "undefined") {
       progress.success = e.detail.success;
       progress.error = e.detail.error ?? null;
       progress.cancelled = e.detail.cancelled === true;
+      progress.warning = e.detail.warning ?? null;
       progress.value = e.detail.success ? 1 : progress.value;
       // Si el backend manda su propio elapsed (medido con su propio reloj,
       // mas preciso), se usa ese en vez de aproximarlo con Date.now() del

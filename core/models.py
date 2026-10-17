@@ -2,25 +2,9 @@ import math
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
+from core.filenames import sanitize_name
+from core.formats import output_formats
 from core.jobs import job_id_from
-
-
-@dataclass
-class MergeAudioConfig:
-    input_files: list[Path]
-    output_file: Path
-    base_folder: Path
-
-
-@dataclass
-class DivergeAudioConfig:
-    input_file: Path
-    base_folder: Path        # carpeta base del proyecto (naming en modo audio)
-    output_folder: Path      # carpeta real donde se escriben los segmentos
-    interval_seconds: int
-    output_format: str
-    media_type: str = "audio"     # "audio" | "video"
-    use_subfolder: bool = True
 
 
 def _is_number(value) -> bool:
@@ -38,6 +22,110 @@ def _optional_text(raw: dict, key: str) -> str | None:
     if raw.get(key) is None:
         return None
     return _require_text(raw, key)
+
+
+@dataclass
+class MergeAudioConfig:
+    input_files: list[Path]
+    output_file: Path
+
+
+@dataclass
+class MergeOptions:
+    """
+    Opciones de api.run_merge / api.plan_merge tal como llegan del frontend
+    (claves snake_case). `from_dict` valida claves y tipos y levanta ValueError
+    con un mensaje legible.
+
+    file_paths     archivos a unir, en orden (mínimo 2)
+    output_name    nombre de salida SIN extensión; se limpia para Windows (core/filenames.py)
+    output_format  extensión de salida; debe ser válida para media_type (core/formats.py)
+    media_type     "audio" | "video"
+    durations      duración conocida de cada archivo (None/0 = desconocida: se lee con ffprobe)
+    job_id         lo genera el frontend (ver core/jobs.py)
+
+    La salida se escribe junto al primer archivo: Diverge la busca ahí.
+    """
+
+    file_paths: list[str]
+    output_name: str
+    output_format: str
+    media_type: str = "audio"
+    durations: list[float | None] | None = None
+    job_id: str | None = None
+
+    _REQUIRED = ("file_paths", "output_name", "output_format")
+
+    @classmethod
+    def from_dict(cls, raw) -> "MergeOptions":
+        if not isinstance(raw, dict):
+            raise ValueError("Las opciones deben ser un objeto.")
+
+        known = {f.name for f in fields(cls)}
+        unknown = sorted(set(raw) - known)
+        if unknown:
+            raise ValueError("Opciones desconocidas: " + ", ".join(unknown))
+        missing = [k for k in cls._REQUIRED if k not in raw]
+        if missing:
+            raise ValueError("Faltan opciones: " + ", ".join(missing))
+
+        paths = raw["file_paths"]
+        if not isinstance(paths, list) or not all(isinstance(p, str) and p.strip() for p in paths):
+            raise ValueError("La opción «file_paths» debe ser una lista de rutas.")
+        if len(paths) < 2:
+            raise ValueError("Se necesitan al menos 2 archivos para hacer un merge.")
+
+        media_type = raw.get("media_type", "audio")
+        if media_type not in ("audio", "video"):
+            raise ValueError("La opción «media_type» debe ser «audio» o «video».")
+
+        name = sanitize_name(_require_text(raw, "output_name"))
+        if not name:
+            raise ValueError("El nombre de salida no es válido: no queda nada tras quitar los caracteres no permitidos.")
+
+        fmt = _require_text(raw, "output_format").strip().lower()
+        if fmt not in output_formats(media_type):
+            raise ValueError(
+                f"El formato «{fmt}» no es válido para {media_type}. "
+                f"Formatos admitidos: {', '.join(output_formats(media_type))}."
+            )
+
+        durations = raw.get("durations")
+        if durations is not None:
+            if not isinstance(durations, list) or len(durations) != len(paths):
+                raise ValueError("La opción «durations» debe tener una duración por archivo.")
+            if not all(d is None or (_is_number(d) and d >= 0) for d in durations):
+                raise ValueError("Cada duración debe ser un número mayor o igual que 0 (o null si se desconoce).")
+
+        if raw.get("job_id") is not None and job_id_from(raw) is None:
+            raise ValueError("La opción «job_id» no es válida.")
+
+        return cls(
+            file_paths=list(paths),
+            output_name=name,
+            output_format=fmt,
+            media_type=media_type,
+            durations=list(durations) if durations is not None else None,
+            job_id=job_id_from(raw),
+        )
+
+    def to_config(self) -> MergeAudioConfig:
+        files = [Path(p) for p in self.file_paths]
+        return MergeAudioConfig(
+            input_files=files,
+            output_file=files[0].parent / f"{self.output_name}.{self.output_format}",
+        )
+
+
+@dataclass
+class DivergeAudioConfig:
+    input_file: Path
+    base_folder: Path        # carpeta base del proyecto (naming en modo audio)
+    output_folder: Path      # carpeta real donde se escriben los segmentos
+    interval_seconds: int
+    output_format: str
+    media_type: str = "audio"     # "audio" | "video"
+    use_subfolder: bool = True
 
 
 @dataclass
