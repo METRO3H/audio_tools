@@ -5,6 +5,7 @@ from pathlib import Path
 from core.filenames import sanitize_name
 from core.formats import output_formats
 from core.jobs import job_id_from
+from core import video_encoding
 
 
 def _is_number(value) -> bool:
@@ -256,6 +257,147 @@ class AudioToVideoConfig:
     preset:           str   = "medium"
     resolution:       str   = "1280x720"  # usado solo si no hay imagen
     copy_audio:       bool  = True
+
+
+def _whole_number(raw: dict, key: str, default: int) -> int:
+    """Entero (los números de JS llegan como int o float con valor entero)."""
+    value = raw.get(key, default)
+    if not _is_number(value) or not float(value).is_integer():
+        raise ValueError(f"La opción «{key}» debe ser un número entero.")
+    return int(value)
+
+
+@dataclass
+class AudioToVideoOptions:
+    """
+    Opciones de api.run_audio_to_video / api.plan_audio_to_video tal como llegan
+    del frontend (claves snake_case). `from_dict` valida claves y valores contra
+    core/video_encoding.py y levanta ValueError con un mensaje legible;
+    `to_config` resuelve el AudioToVideoConfig que usa la action.
+
+    file_paths        audios a convertir (mínimo 1); cada uno produce un video
+    base_folder       carpeta base: los videos se escriben en <base_folder>/videos
+    background_image  imagen de fondo; None = fondo negro con `resolution`
+    encoder           cpu | nvidia | amd | intel
+    fps               uno de video_encoding.FPS_OPTIONS
+    crf               calidad 0-51 (menor es mejor; es el cq/qp en nvidia/amd/intel)
+    preset            uno de video_encoding.PRESETS[encoder]; si falta, el de por defecto
+    resolution        solo cuenta sin imagen; una de video_encoding.RESOLUTIONS
+    copy_audio        True: copia el audio sin recodificar; False: AAC 192k
+    durations         duración conocida de cada audio (None/0 = desconocida: se lee con ffprobe)
+    job_id            lo genera el frontend (ver core/jobs.py)
+    """
+
+    file_paths: list[str]
+    base_folder: str
+    background_image: str | None = None
+    encoder: str = "cpu"
+    fps: int = 1
+    crf: int = 23
+    preset: str | None = None
+    resolution: str = "1280x720"
+    copy_audio: bool = True
+    durations: list[float | None] | None = None
+    job_id: str | None = None
+
+    _REQUIRED = ("file_paths", "base_folder")
+
+    @classmethod
+    def from_dict(cls, raw) -> "AudioToVideoOptions":
+        if not isinstance(raw, dict):
+            raise ValueError("Las opciones deben ser un objeto.")
+
+        known = {f.name for f in fields(cls)}
+        unknown = sorted(set(raw) - known)
+        if unknown:
+            raise ValueError("Opciones desconocidas: " + ", ".join(unknown))
+        missing = [k for k in cls._REQUIRED if k not in raw]
+        if missing:
+            raise ValueError("Faltan opciones: " + ", ".join(missing))
+
+        paths = raw["file_paths"]
+        if not isinstance(paths, list) or not all(isinstance(p, str) and p.strip() for p in paths):
+            raise ValueError("La opción «file_paths» debe ser una lista de rutas.")
+        if not paths:
+            raise ValueError("Selecciona al menos un audio.")
+
+        encoder = raw.get("encoder", "cpu")
+        if encoder not in video_encoding.ENCODERS:
+            raise ValueError(
+                "La opción «encoder» debe ser una de: " + ", ".join(video_encoding.ENCODERS) + "."
+            )
+
+        fps = _whole_number(raw, "fps", 1)
+        if fps not in video_encoding.FPS_OPTIONS:
+            raise ValueError(
+                "La opción «fps» debe ser una de: " + ", ".join(map(str, video_encoding.FPS_OPTIONS)) + "."
+            )
+
+        low, high = video_encoding.QUALITY_RANGE
+        crf = _whole_number(raw, "crf", 23)
+        if not low <= crf <= high:
+            raise ValueError(f"La opción «crf» debe estar entre {low} y {high}.")
+
+        presets = video_encoding.PRESETS[encoder]
+        preset = raw.get("preset")
+        if preset is None:
+            preset = video_encoding.DEFAULT_PRESETS[encoder]
+        elif preset not in presets:
+            raise ValueError(
+                f"El preset «{preset}» no existe para el encoder «{encoder}»; usa uno de: "
+                + ", ".join(presets) + "."
+            )
+
+        resolution = raw.get("resolution", "1280x720")
+        if resolution not in video_encoding.RESOLUTIONS:
+            raise ValueError(
+                "La opción «resolution» debe ser una de: " + ", ".join(video_encoding.RESOLUTIONS) + "."
+            )
+
+        copy_audio = raw.get("copy_audio", True)
+        if not isinstance(copy_audio, bool):
+            raise ValueError("La opción «copy_audio» debe ser verdadero o falso.")
+
+        durations = raw.get("durations")
+        if durations is not None:
+            if (
+                not isinstance(durations, list)
+                or len(durations) != len(paths)
+                or not all(d is None or (_is_number(d) and d >= 0) for d in durations)
+            ):
+                raise ValueError(
+                    "La opción «durations» debe ser una lista con un número (o null) por cada archivo."
+                )
+
+        if raw.get("job_id") is not None and job_id_from(raw) is None:
+            raise ValueError("La opción «job_id» no es válida.")
+
+        return cls(
+            file_paths=list(paths),
+            base_folder=_require_text(raw, "base_folder"),
+            background_image=_optional_text(raw, "background_image"),
+            encoder=encoder,
+            fps=fps,
+            crf=crf,
+            preset=preset,
+            resolution=resolution,
+            copy_audio=copy_audio,
+            durations=durations,
+            job_id=job_id_from(raw),
+        )
+
+    def to_config(self) -> AudioToVideoConfig:
+        return AudioToVideoConfig(
+            input_files=[Path(p) for p in self.file_paths],
+            base_folder=Path(self.base_folder),
+            background_image=Path(self.background_image) if self.background_image else None,
+            encoder=self.encoder,
+            fps=self.fps,
+            crf=self.crf,
+            preset=self.preset or video_encoding.DEFAULT_PRESETS[self.encoder],
+            resolution=self.resolution,
+            copy_audio=self.copy_audio,
+        )
 
 
 

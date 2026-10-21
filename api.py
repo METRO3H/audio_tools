@@ -55,11 +55,11 @@ import webview
 import config
 from core.actions.merge_audio import MergeAudioAction, resolve_merge
 from core.actions.diverge_audio import DivergeAudioAction, resolve_diverge
-from core.actions.audio_to_video import AudioToVideoAction, ENCODERS
+from core.actions.audio_to_video import AudioToVideoAction, resolve_audio_to_video
 from core.transcription.transcribe_action import TranscribeAction
 from core.transcription.whisper_runner import WhisperRunner
 from core.ffmpeg_runner import FFmpegRunner
-from core import formats
+from core import formats, video_encoding
 from core.jobs import (
     JobEvents,
     describe_error,
@@ -69,12 +69,11 @@ from core.jobs import (
     run_ffmpeg_commands,
     run_ffmpeg_single,
 )
-from core.process import NO_WINDOW
 from core.media_info import get_duration, get_chapters
 from core.models import (
     MergeOptions,
     DivergeOptions,
-    AudioToVideoConfig,
+    AudioToVideoOptions,
     TranscribeConfig,
 )
 from pathlib import Path
@@ -171,6 +170,7 @@ class AudioToolsAPI:
         # nunca más de uno a la vez (todas las tools son mutuamente
         # excluyentes en esta ventana), así que un solo slot alcanza.
         self._active_remote_runner = None
+        self._encoder_probe = video_encoding.EncoderProbe(config.FFMPEG_BIN)
 
     def set_window(self, window: webview.Window) -> None:
         """Llamado desde main.py una vez que la ventana está lista."""
@@ -188,6 +188,7 @@ class AudioToolsAPI:
                 "video": sorted(_VIDEO_EXTS),
             },
             "output_formats": formats.as_config(),
+            "video_encoding": video_encoding.as_config(),
         }
 
     def get_duration(self, file_path: str) -> float:
@@ -367,59 +368,55 @@ class AudioToolsAPI:
 
     # — Audio to Video ——————————————————————————————————————————————————————
 
-    def run_audio_to_video(
-        self,
-        file_paths:       list[str],
-        base_folder:      str,
-        background_image: str | None = None,
-        encoder:          str = "cpu",
-        fps:              int = 1,
-        crf:              int = 23,
-        preset:           str = "medium",
-        resolution:       str = "1280x720",
-        copy_audio:       bool = True,
-    ) -> None:
-        from core.actions.audio_to_video import AudioToVideoAction
-        from core.models import AudioToVideoConfig
+    def plan_audio_to_video(self, options: dict) -> dict:
+        """
+        Qué va a producir Audio→Video, sin ejecutarlo: carpeta de salida y, por cada
+        audio, su duración y el video que se escribirá (y si ya existe y se sobrescribirá).
+        Es la misma planificación que usa run_audio_to_video.
 
-        config_ = AudioToVideoConfig(
-            input_files=_paths(file_paths),
-            base_folder=Path(base_folder),
-            background_image=Path(
-                background_image) if background_image else None,
-            encoder=encoder,
-            fps=fps,
-            crf=crf,
-            preset=preset,
-            resolution=resolution,
-            copy_audio=copy_audio,
+        Opciones (claves snake_case; ver core/models.py::AudioToVideoOptions): las mismas
+        que run_audio_to_video, sin job_id. Conviene enviar `durations` (ya conocidas por
+        el frontend) para no lanzar ffprobe en cada consulta.
+
+        Nunca lanza: devuelve {"error": "mensaje"} si algo falla (opciones inválidas,
+        carpeta base inexistente, dos audios con el mismo nombre...); si todo va bien,
+            {
+              "output_dir": str,
+              "files": [{index, name, path, duration, output, output_name, exists}, ...],
+              "total_duration": float
+            }
+        No crea carpetas ni escribe nada.
+        """
+        try:
+            opts = AudioToVideoOptions.from_dict(options)
+            inputs = resolve_audio_to_video(opts, lambda path: get_duration(config.FFPROBE_BIN, path))
+            return AudioToVideoAction().plan(inputs.config, inputs.durations).to_dict()
+        except Exception as exc:  # noqa: BLE001 - el frontend solo necesita el mensaje
+            return {"error": describe_error(exc)}
+
+    def run_audio_to_video(self, options: dict) -> None:
+        """
+        Convierte cada audio en un video (<base_folder>/videos/<nombre>.mp4). Retorna de
+        inmediato: el avance llega por los eventos audiotools:start/log/progress/done
+        (todos con job_id). Cualquier error llega como audiotools:done con success=false
+        y error, nunca como excepción.
+
+        Opciones (claves snake_case): las mismas que plan_audio_to_video, más job_id
+        (generado por el frontend). Ver core/models.py::AudioToVideoOptions.
+        """
+        events = JobEvents(
+            lambda event, detail: _emit(self._window, event, detail),
+            tool="audio_to_video",
+            job_id=job_id_from(options),
         )
-        action = AudioToVideoAction()
-        args_list = action.build_args_list(config_)
-        durations = [
-            get_duration(config.FFPROBE_BIN, f)
-            for f in config_.input_files
-        ]
-
-        on_log, on_progress, on_file_start, on_file_done = _make_sequential_callbacks(
-            self._window, len(args_list)
-        )
-
-        def on_done(success: bool):
-            _emit(self._window, "audiotools:done", {
-                "success": success,
-                "cancelled": job_cancelled(self._ffmpeg, success),
-            })
-
-        self._ffmpeg.run_sequential(
-            args_list=args_list,
-            on_log=on_log,
-            on_done=on_done,
-            on_progress=on_progress,
-            on_file_start=on_file_start,
-            on_file_done=on_file_done,
-            durations=durations,
-        )
+        with job_errors(events):
+            opts = AudioToVideoOptions.from_dict(options)
+            inputs = resolve_audio_to_video(opts, lambda path: get_duration(config.FFPROBE_BIN, path))
+            action = AudioToVideoAction()
+            plan = action.plan(inputs.config, inputs.durations)
+            commands = action.build_commands(inputs.config, plan)
+            plan.output_dir.mkdir(parents=True, exist_ok=True)
+            run_ffmpeg_commands(self._ffmpeg, commands, events)
 
     # — Transcribe ——————————————————————————————————————————————————————————
 
@@ -736,32 +733,11 @@ class AudioToolsAPI:
         return self.get_file_info(str(target))
 
     def detect_encoders(self) -> dict:
-        import subprocess
-        from core.actions.audio_to_video import ENCODERS
-
-        available = {"cpu": True}
-        for key, encoder in ENCODERS.items():
-            if key == "cpu":
-                continue
-            try:
-                result = subprocess.run(
-                    [
-                        str(config.FFMPEG_BIN),
-                        "-f", "lavfi", "-i", "color=c=black:s=320x240:r=1",
-                        "-t", "0.1",
-                        "-c:v", encoder,
-                        "-f", "null", "-",
-                    ],
-                    capture_output=True,
-                    timeout=5,
-                    creationflags=NO_WINDOW,
-                )
-                available[key] = result.returncode == 0
-            except Exception as e:
-                print(f"[DEBUG] encoder={encoder} exception={e}", flush=True)
-                available[key] = False
-
-        return available
+        """
+        Qué encoders de video hay disponibles: {"cpu": True, "nvidia": bool, ...}.
+        Se averigua una sola vez por sesión (lanza ffmpeg varias veces) y se recuerda.
+        """
+        return self._encoder_probe.available()
 
     def scan_images_folder(self, base_folder: str) -> dict | None:
         """

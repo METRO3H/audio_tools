@@ -2,107 +2,98 @@
    import { bridge } from "@shared/services/bridge.svelte.js";
    import { progress } from "@shared/state/progress.svelte.js";
    import { appConfig } from "@shared/state/config.svelte.js";
+   import { useToolRun } from "@shared/state/useToolRun.svelte.js";
+   import { persisted } from "@shared/state/persisted.svelte.js";
+   import { usePlan } from "@shared/state/usePlan.svelte.js";
+   import { useFileSelection } from "@shared/state/useFileSelection.svelte.js";
    import Spinner from "@shared/ui/Spinner.svelte";
+   import Field from "@shared/ui/Field.svelte";
+   import SegmentedControl from "@shared/ui/SegmentedControl.svelte";
    import ProcessingView from "@shared/components/ProcessingView.svelte";
-   import { persistentConfig } from "@shared/services/persistentConfig.js";
    import ViewHeader from "@shared/components/ViewHeader.svelte";
-   import { basename, folderName } from "@shared/utils.js";
+   import FileList from "@shared/components/FileList.svelte";
+   import { basename } from "@shared/utils.js";
    let { goHome } = $props();
+
+   const job = useToolRun("run_audio_to_video");
 
    // ── Estado ───────────────────────────────────────────────────────────────────
 
-   let processing = $state(false);
-   let fileInfos = $state([]);
    let imageInfo = $state(null); // { path, name, optimized }
-   let autoHint = $state("");
    let imageHint = $state("");
-   let showAdvanced = $state(false);
 
-   // Encoders
-   let availableEncoders = $state({ cpu: true, nvidia: false, amd: false, intel: false });
-   let encoder = $state("cpu");
+   // Los audios con los que se va a trabajar: se detectan en la carpeta base (./audios/parts o
+   // ./audios) o se eligen a mano.
+   const selection = useFileSelection({
+      scan: (folder) => bridge.scan_audio_parts_or_audios(folder),
+      pick: () =>
+         bridge.pick_files(
+            (appConfig.mediaExtensions.audio ?? []).map((ext) => "*" + ext),
+            appConfig.baseFolder,
+            "audio",
+         ),
+      emptyHint: "No se encontraron audios",
+      formatDetected: (n, result) => `✓ ${n} audio(s) detectados desde ${result.source}`,
+   });
+
+   const fileInfos = $derived(selection.files);
+
+   // Preferencias que se recuerdan entre sesiones. `encoder: null` = "el mejor disponible":
+   // solo se guarda un encoder cuando el USUARIO lo elige, y uno guardado se respeta al montar
+   // (la detección ya no lo pisa). Lo guardado que no sirva (config manipulada, GPU que ya no
+   // está) se resuelve más abajo sin tocar lo guardado.
+   const cfg = persisted("audio_to_video_config", {
+      encoder: null,
+      fps: 1,
+      crf: 23,
+      preset: "medium",
+      resolution: "1280x720",
+      copyAudio: true,
+      showAdvanced: false,
+   });
+
+   // Lo que el backend sabe codificar (encoders, presets, fps, resoluciones).
+   const caps = $derived(appConfig.videoEncoding);
+
+   // ── Encoders disponibles en esta máquina ─────────────────────────────────────
+
+   let availableEncoders = $state({ cpu: true });
    let detectingEncoders = $state(true);
-
-   // Opciones de encoding
-   let fps = $state(1);
-   let crf = $state(23);
-   let preset = $state("medium");
-   let resolution = $state("1280x720");
-   let copyAudio = $state(true);
-
-   const FPS_OPTIONS = [1, 24, 30, 60];
-   const RESOLUTION_OPTIONS = ["1280x720", "1920x1080", "3840x2160"];
-   const AUDIO_EXTS = ["*.mp3", "*.wav", "*.m4a", "*.aac", "*.ogg", "*.flac", "*.opus"];
-
-   // Presets según encoder
-   const presetOptions = $derived(
-      encoder === "nvidia"
-         ? ["p1", "p2", "p3", "p4", "p5", "p6", "p7"]
-         : encoder === "cpu"
-           ? ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow"]
-           : ["fast", "medium", "slow"],
-   );
-// ── Cargar configuración guardada ────────────────────────────────────────────
-$effect(() => {
-  const saved = persistentConfig.get('audio_to_video_config');
-  if (saved) {
-    encoder = saved.encoder ?? "cpu";
-    fps = saved.fps ?? 1;
-    crf = saved.crf ?? 23;
-    preset = saved.preset ?? "medium";
-    resolution = saved.resolution ?? "1280x720";
-    copyAudio = saved.copyAudio ?? true;
-    showAdvanced = saved.showAdvanced ?? false;
-  }
-});
-
-// ── Guardar configuración al cambiar ────────────────────────────────────────
-$effect(() => {
-  persistentConfig.set('audio_to_video_config', {
-    encoder,
-    fps,
-    crf,
-    preset,
-    resolution,
-    copyAudio,
-    showAdvanced,
-  });
-});
-   $effect(() => {
-      // Reset preset al cambiar encoder si no es válido
-      if (!presetOptions.includes(preset)) {
-         preset = presetOptions[Math.floor(presetOptions.length / 2)];
-      }
-   });
-
-   // fileInfos para ProcessingView
-   const processingFileInfos = $derived(fileInfos);
-
-   const outputPath = $derived(appConfig.baseFolder ? `${appConfig.baseFolder}\\videos` : "");
-
-   const canRun = $derived(fileInfos.length >= 1 && !!appConfig.baseFolder && !progress.running);
-
-   const encoderLabels = {
-      cpu: "CPU (libx264)",
-      nvidia: "NVIDIA (nvenc)",
-      amd: "AMD (amf)",
-      intel: "Intel (qsv)",
-   };
-
-   // ── Inicialización ────────────────────────────────────────────────────────────
+   let detectError = $state("");
 
    $effect(() => {
-      // Detectar encoders al montar
-      bridge.detect_encoders().then((result) => {
-         availableEncoders = result;
-         detectingEncoders = false;
-         // Prioridad: nvidia > amd > intel > cpu
-         if (result.nvidia) encoder = "nvidia";
-         else if (result.amd) encoder = "amd";
-         else if (result.intel) encoder = "intel";
-         else encoder = "cpu";
-      });
+      Promise.resolve()
+         .then(() => bridge.detect_encoders())
+         .then((result) => {
+            availableEncoders = result;
+         })
+         .catch((err) => {
+            detectError = `No se pudieron detectar los encoders (${err instanceof Error ? err.message : err}). Solo se ofrece CPU.`;
+         })
+         .finally(() => {
+            detectingEncoders = false;
+         });
    });
+
+   const isAvailable = (id) => availableEncoders[id] === true;
+
+   // ── Valores efectivos ────────────────────────────────────────────────────────
+
+   // Encoder: el guardado si sigue disponible; si no, el mejor disponible. Mientras se detecta
+   // se muestra lo guardado (y no se puede ejecutar): así nunca "salta" de uno a otro al abrir.
+   const encoder = $derived.by(() => {
+      const saved = caps.encoders.some((e) => e.id === cfg.encoder) ? cfg.encoder : null;
+      if (detectingEncoders) return saved ?? "cpu";
+      if (saved && isAvailable(saved)) return saved;
+      return caps.encoder_priority.find(isAvailable) ?? "cpu";
+   });
+
+   const presetOptions = $derived(caps.presets[encoder] ?? []);
+   // Un preset de otro encoder (p4 con CPU) no vale: se usa el de por defecto del encoder.
+   const preset = $derived(presetOptions.includes(cfg.preset) ? cfg.preset : (caps.default_presets[encoder] ?? ""));
+   const fps = $derived(caps.fps.includes(cfg.fps) ? cfg.fps : (caps.fps[0] ?? 1));
+   const resolution = $derived(caps.resolutions.includes(cfg.resolution) ? cfg.resolution : (caps.resolutions[0] ?? "1280x720"));
+   const crf = $derived(Math.min(caps.quality_range[1], Math.max(caps.quality_range[0], cfg.crf)));
 
    // ── Carga ────────────────────────────────────────────────────────────────────
 
@@ -114,28 +105,16 @@ $effect(() => {
    }
 
    async function loadAll(folder) {
-      await Promise.all([loadAudios(folder), loadImage(folder)]);
+      await Promise.all([selection.loadFromFolder(folder), loadImage(folder)]);
    }
 
-   async function loadAudios(folder) {
-      const result = await bridge.scan_audio_parts_or_audios(folder);
-      if (result.error) {
-         fileInfos = [];
-         autoHint = `⚠ ${result.error}`;
-         return;
-      }
-      if (!result.files.length) {
-         fileInfos = [];
-         autoHint = "⚠ No se encontraron audios";
-         return;
-      }
-      const infos = await Promise.all(result.files.map((p) => bridge.get_file_info(p)));
-      fileInfos = infos.map((info, i) => ({ ...info, path: result.files[i] }));
-      autoHint = `✓ ${infos.length} audio(s) detectados desde ${result.source}`;
-   }
+   // Si se cambia de carpeta mientras una búsqueda sigue en curso, solo cuenta la última.
+   let imageLoad = 0;
 
    async function loadImage(folder) {
+      const mine = ++imageLoad;
       const result = await bridge.scan_images_folder(folder);
+      if (mine !== imageLoad) return;
       if (!result) {
          imageInfo = null;
          imageHint = "⚠ No se encontró imagen en ./images — se usará fondo negro";
@@ -145,72 +124,83 @@ $effect(() => {
       imageHint = result.optimized ? `✓ Imagen optimizada: ${result.name}` : `✓ Imagen detectada: ${result.name}`;
    }
 
-   async function pickFiles() {
-      const paths = await bridge.pick_files(AUDIO_EXTS, appConfig.baseFolder, "audio");
-      if (!paths.length) return;
-      const infos = await Promise.all(paths.map((p) => bridge.get_file_info(p)));
-      fileInfos = infos.map((info, i) => ({ ...info, path: paths[i] }));
-      autoHint = "";
-   }
-
+   // La imagen elegida a mano se usa tal cual: no se vuelve a escanear la carpeta (el escaneo
+   // optimiza imágenes y su resultado se descartaba).
    async function pickImage() {
       const path = await bridge.pick_image(appConfig.baseFolder);
       if (!path) return;
-      const result = await bridge.scan_images_folder(appConfig.baseFolder);
-      // Si eligió manualmente, usamos esa imagen directamente optimizándola
+      imageLoad++; // una detección automática que siga en curso no debe pisar esta elección
       imageInfo = { path, name: basename(path), optimized: false };
       imageHint = `✓ Imagen seleccionada: ${basename(path)}`;
    }
 
    function clearImage() {
+      imageLoad++;
       imageInfo = null;
       imageHint = "Sin imagen — se usará fondo negro";
    }
 
-   function removeFile(path) {
-      fileInfos = fileInfos.filter((f) => f.path !== path);
-   }
+   // ── Plan ─────────────────────────────────────────────────────────────────────
 
-   // ── Ejecutar ─────────────────────────────────────────────────────────────────
-
-   async function run() {
-      if (!canRun) return;
-      progress.reset();
-      processing = true;
-      progress.running = true;
-
-      await bridge.run_audio_to_video(
-         fileInfos.map((f) => f.path),
-         appConfig.baseFolder,
-         imageInfo?.path ?? null,
+   // Opciones que se le envían al backend, o null si todavía no hay con qué planificar.
+   // El backend decide dónde queda cada video, detecta nombres repetidos y avisa de los
+   // videos que ya existen.
+   const planOptions = $derived.by(() => {
+      if (!fileInfos.length || !appConfig.baseFolder || !caps.encoders.length) return null;
+      return {
+         file_paths: fileInfos.map((f) => f.path),
+         base_folder: appConfig.baseFolder,
+         background_image: imageInfo?.path ?? null,
          encoder,
          fps,
          crf,
          preset,
          resolution,
-         copyAudio,
-      );
-   }
+         copy_audio: cfg.copyAudio,
+         durations: fileInfos.map((f) => (f.duration_seconds > 0 ? f.duration_seconds : null)),
+      };
+   });
 
-   function cancel() {
-      bridge.cancel();
-   }
+   // plan = { output_dir, files: [{ index, name, path, duration, output, output_name, exists }], total_duration } | null
+   const planState = usePlan(() => planOptions, (options) => bridge.plan_audio_to_video(options));
+   const plan = $derived(planState.value);
+   const planError = $derived(planState.error);
+   const planPending = $derived(planState.pending);
 
-   function goBack() {
-      processing = false;
-      progress.reset();
+   const overwrites = $derived((plan?.files ?? []).filter((f) => f.exists).map((f) => f.output_name));
+
+   // Filas de ProcessingView.
+   const processingFiles = $derived.by(() => {
+      const sizeByPath = new Map(fileInfos.map((f) => [f.path, f.size_mb]));
+      return (plan?.files ?? []).map((f) => ({
+         name: f.name,
+         size_mb: sizeByPath.get(f.path) ?? 0,
+         duration_seconds: f.duration,
+         path: f.path,
+      }));
+   });
+
+   // No se ejecuta con una consulta de plan en vuelo (el plan que se ve podría no ser el último)
+   // ni mientras se detectan los encoders (el que se muestra todavía es provisional).
+   const canRun = $derived(!!plan && !planPending && !progress.running && !detectingEncoders);
+
+   // ── Ejecutar ─────────────────────────────────────────────────────────────────
+
+   async function run() {
+      if (!canRun) return;
+      await job.start(planOptions);
    }
 </script>
 
-{#if processing}
+{#if job.processing}
    <ProcessingView
       title="Audio → Video"
       {goHome}
-      fileInfos={processingFileInfos}
-      {outputPath}
+      fileInfos={processingFiles}
+      outputPath={plan?.output_dir ?? ""}
       showOpenFile={false}
-      onCancel={cancel}
-      onBack={goBack}
+      onCancel={job.cancel}
+      onBack={job.back}
    />
 {:else}
    <div class="flex h-full flex-col">
@@ -219,8 +209,7 @@ $effect(() => {
       <main class="flex flex-1 flex-col items-center overflow-y-auto px-8 py-10">
          <div class="flex w-full max-w-md flex-col gap-5">
             <!-- Carpeta base -->
-            <div class="flex flex-col gap-1.5">
-               <span class="text-xs text-white/40">Carpeta base</span>
+            <Field label="Carpeta base">
                <button
                   class="flex items-center gap-2 rounded-lg border border-white/10
                    bg-white/5 px-3 py-2 text-xs text-left transition-all
@@ -232,55 +221,16 @@ $effect(() => {
                      {appConfig.baseFolder || "Sin seleccionar"}
                   </span>
                </button>
-            </div>
+            </Field>
 
             <!-- Archivos de audio -->
-            <div class="flex flex-col gap-1.5">
-               <div class="flex items-center justify-between">
-                  <span class="text-xs text-white/40">
-                     Archivos
-                     {#if fileInfos.length}
-                        <span class="text-white/20">({fileInfos.length})</span>
-                     {/if}
-                  </span>
-                  <button class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors" onclick={pickFiles}>
-                     Seleccionar manualmente
-                  </button>
-               </div>
-
-               {#if autoHint}
-                  <span class="text-xs {autoHint.startsWith('⚠') ? 'text-yellow-400' : 'text-emerald-400'}">
-                     {autoHint}
-                  </span>
-               {/if}
-
-               {#if fileInfos.length}
-                  <ul class="flex flex-col gap-1 overflow-y-auto max-h-40">
-                     {#each fileInfos as file (file.path)}
-                        <li
-                           class="flex items-center justify-between rounded-lg
-                           bg-white/5 px-3 py-1.5 text-xs text-white/60 shrink-0"
-                        >
-                           <span class="truncate">{file.name}</span>
-                           <div class="flex shrink-0 items-center gap-2 ml-2">
-                              <span class="text-white/30">{file.size_mb} MB</span>
-                              <button
-                                 class="text-white/20 hover:text-red-400 transition-colors"
-                                 onclick={() => removeFile(file.path)}>✕</button
-                              >
-                           </div>
-                        </li>
-                     {/each}
-                  </ul>
-               {:else}
-                  <div
-                     class="rounded-lg border border-dashed border-white/10 p-4
-                        text-center text-xs text-white/20"
-                  >
-                     {appConfig.baseFolder ? "No se encontraron audios" : "Selecciona una carpeta base primero"}
-                  </div>
-               {/if}
-            </div>
+            <FileList
+               fileInfos={selection.files}
+               autoHint={selection.hint}
+               onPickFiles={selection.pickFiles}
+               onRemove={selection.remove}
+               emptyText={appConfig.baseFolder ? "No se encontraron audios" : "Selecciona una carpeta base primero"}
+            />
 
             <!-- Imagen de fondo -->
             <div class="flex flex-col gap-1.5">
@@ -320,154 +270,130 @@ $effect(() => {
                      class="rounded-lg border border-dashed border-white/10 p-3
                         text-center text-xs text-white/20"
                   >
-                     Fondo negro 1280×720
+                     Fondo negro {resolution.replace("x", "×")}
                   </div>
                {/if}
             </div>
 
             <!-- Encoder -->
-            <div class="flex flex-col gap-1.5">
-               <div class="flex items-center gap-2">
-                  <span class="text-xs text-white/40">Encoder</span>
-                  {#if detectingEncoders}
+            <Field label="Encoder">
+               {#if detectingEncoders}
+                  <div class="flex items-center gap-2">
                      <Spinner size={12} color="text-white/30" duration="1s" />
                      <span class="text-xs text-white/20">Detectando...</span>
-                  {/if}
-               </div>
-               <div class="flex flex-wrap gap-2">
-                  {#each Object.entries(encoderLabels) as [key, label] (key)}
-                     <button
-                        class="rounded-md px-3 py-1.5 text-xs transition-colors
-                       {!availableEncoders[key]
-                           ? 'opacity-30 cursor-not-allowed border border-white/10 bg-white/5 text-white/30'
-                           : encoder === key
-                             ? 'bg-indigo-600 text-white'
-                             : 'border border-white/10 bg-white/5 text-white/50 hover:text-white'}"
-                        onclick={() => {
-                           if (availableEncoders[key]) encoder = key;
-                        }}
-                        disabled={!availableEncoders[key]}
-                     >
-                        {label}
-                     </button>
-                  {/each}
-               </div>
-            </div>
+                  </div>
+               {/if}
+               <SegmentedControl
+                  label="Encoder"
+                  size="sm"
+                  wrap
+                  value={encoder}
+                  options={caps.encoders.map((e) => ({ value: e.id, label: e.label, disabled: !isAvailable(e.id) }))}
+                  onchange={(id) => (cfg.encoder = id)}
+               />
+               {#if detectError}
+                  <span role="alert" class="text-xs text-yellow-400">{detectError}</span>
+               {/if}
+            </Field>
 
             <!-- FPS -->
-            <div class="flex flex-col gap-1.5">
-               <span class="text-xs text-white/40">FPS</span>
-               <div class="flex gap-2">
-                  {#each FPS_OPTIONS as f (f)}
-                     <button
-                        class="rounded-md px-3 py-1.5 text-xs transition-colors
-                       {fps === f
-                           ? 'bg-indigo-600 text-white'
-                           : 'border border-white/10 bg-white/5 text-white/50 hover:text-white'}"
-                        onclick={() => (fps = f)}
-                     >
-                        {f}
-                     </button>
-                  {/each}
-               </div>
-            </div>
+            <Field label="FPS">
+               <SegmentedControl
+                  label="FPS"
+                  size="sm"
+                  value={fps}
+                  options={caps.fps.map((f) => ({ value: f, label: String(f) }))}
+                  onchange={(f) => (cfg.fps = f)}
+               />
+            </Field>
 
             <!-- Toggle opciones avanzadas -->
             <button
                class="flex items-center gap-2 text-xs text-white/30 hover:text-white/60
                  transition-colors w-fit"
-               onclick={() => (showAdvanced = !showAdvanced)}
+               onclick={() => (cfg.showAdvanced = !cfg.showAdvanced)}
             >
-               <span>{showAdvanced ? "▼" : "▶"}</span>
+               <span>{cfg.showAdvanced ? "▼" : "▶"}</span>
                <span>Opciones avanzadas</span>
             </button>
 
-            {#if showAdvanced}
+            {#if cfg.showAdvanced}
                <div class="flex flex-col gap-4 rounded-xl border border-white/5 bg-white/3 p-4">
                   <!-- CRF -->
-                  <div class="flex flex-col gap-1.5">
-                     <div class="flex items-center justify-between">
-                        <label class="text-xs text-white/40" for="crf"> Calidad (CRF) — menor es mejor </label>
-                        <span class="text-xs text-white/50">{crf}</span>
-                     </div>
+                  <Field label="Calidad (CRF) — menor es mejor" for="crf">
                      <input
                         id="crf"
                         type="range"
-                        bind:value={crf}
-                        min="0"
-                        max="51"
+                        value={crf}
+                        oninput={(e) => (cfg.crf = Number(e.currentTarget.value))}
+                        min={caps.quality_range[0]}
+                        max={caps.quality_range[1]}
                         step="1"
                         class="accent-indigo-500 w-full"
                      />
                      <div class="flex justify-between text-xs text-white/20">
-                        <span>0 (mejor)</span>
-                        <span>51 (peor)</span>
+                        <span>{caps.quality_range[0]} (mejor)</span>
+                        <span class="text-white/50">{crf}</span>
+                        <span>{caps.quality_range[1]} (peor)</span>
                      </div>
-                  </div>
+                  </Field>
 
                   <!-- Preset -->
-                  <div class="flex flex-col gap-1.5">
-                     <span class="text-xs text-white/40">Preset</span>
-                     <div class="flex flex-wrap gap-1.5">
-                        {#each presetOptions as p (p)}
-                           <button
-                              class="rounded-md px-2.5 py-1 text-xs transition-colors
-                           {preset === p
-                                 ? 'bg-indigo-600 text-white'
-                                 : 'border border-white/10 bg-white/5 text-white/50 hover:text-white'}"
-                              onclick={() => (preset = p)}
-                           >
-                              {p}
-                           </button>
-                        {/each}
-                     </div>
-                  </div>
+                  <Field label="Preset">
+                     <SegmentedControl
+                        label="Preset"
+                        size="sm"
+                        wrap
+                        value={preset}
+                        options={presetOptions.map((p) => ({ value: p, label: p }))}
+                        onchange={(p) => (cfg.preset = p)}
+                     />
+                  </Field>
 
                   <!-- Resolución (solo si no hay imagen) -->
                   {#if !imageInfo}
-                     <div class="flex flex-col gap-1.5">
-                        <span class="text-xs text-white/40">Resolución (fondo negro)</span>
-                        <div class="flex gap-2">
-                           {#each RESOLUTION_OPTIONS as r (r)}
-                              <button
-                                 class="rounded-md px-3 py-1 text-xs transition-colors
-                             {resolution === r
-                                    ? 'bg-indigo-600 text-white'
-                                    : 'border border-white/10 bg-white/5 text-white/50 hover:text-white'}"
-                                 onclick={() => (resolution = r)}
-                              >
-                                 {r}
-                              </button>
-                           {/each}
-                        </div>
-                     </div>
+                     <Field label="Resolución (fondo negro)">
+                        <SegmentedControl
+                           label="Resolución"
+                           size="sm"
+                           wrap
+                           value={resolution}
+                           options={caps.resolutions.map((r) => ({ value: r, label: r }))}
+                           onchange={(r) => (cfg.resolution = r)}
+                        />
+                     </Field>
                   {/if}
 
                   <!-- Audio -->
-                  <div class="flex flex-col gap-1.5">
-                     <span class="text-xs text-white/40">Audio</span>
-                     <div class="flex gap-2">
-                        <button
-                           class="rounded-md px-3 py-1.5 text-xs transition-colors
-                         {copyAudio
-                              ? 'bg-indigo-600 text-white'
-                              : 'border border-white/10 bg-white/5 text-white/50 hover:text-white'}"
-                           onclick={() => (copyAudio = true)}
-                        >
-                           Copy (sin re-encodear)
-                        </button>
-                        <button
-                           class="rounded-md px-3 py-1.5 text-xs transition-colors
-                         {!copyAudio
-                              ? 'bg-indigo-600 text-white'
-                              : 'border border-white/10 bg-white/5 text-white/50 hover:text-white'}"
-                           onclick={() => (copyAudio = false)}
-                        >
-                           AAC 192k
-                        </button>
-                     </div>
-                  </div>
+                  <Field label="Audio">
+                     <SegmentedControl
+                        label="Audio"
+                        size="sm"
+                        wrap
+                        value={cfg.copyAudio}
+                        options={[
+                           { value: true, label: "Copy (sin re-encodear)" },
+                           { value: false, label: "AAC 192k" },
+                        ]}
+                        onchange={(copy) => (cfg.copyAudio = copy)}
+                     />
+                  </Field>
                </div>
+            {/if}
+
+            <!-- Salida: lo que dice el plan -->
+            {#if plan}
+               <span class="text-xs text-white/20 truncate">→ {plan.output_dir}</span>
+            {/if}
+            {#if overwrites.length}
+               <span class="text-xs text-yellow-400 break-words">
+                  Ya existen y se sobrescribirán: {overwrites.slice(0, 3).join(", ")}{overwrites.length > 3
+                     ? ` y ${overwrites.length - 3} más`
+                     : ""}
+               </span>
+            {/if}
+            {#if planError}
+               <span role="alert" class="text-xs text-red-400 break-words">{planError}</span>
             {/if}
 
             <!-- Botón -->

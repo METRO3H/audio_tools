@@ -63,4 +63,46 @@ describe("SegmentedControl", () => {
       mount();
       expect(screen.getAllByRole("button").every((b) => b.getAttribute("type") === "button")).toBe(true);
    });
+
+   it("`size=\"sm\"` da botones compactos; el tamaño por defecto no cambia", () => {
+      mount();
+      expect(button(/Audio/).className).toContain("rounded-lg py-2");
+      cleanup();
+      mount({ size: "sm" });
+      expect(button(/Audio/).className).toContain("rounded-md px-3 py-1.5");
+      expect(button(/Audio/).className).not.toContain("px-4");
+   });
+
+   it("`wrap` deja que los botones pasen a la línea siguiente; sin él, no", () => {
+      mount({ wrap: true });
+      expect(screen.getByRole("group").className).toContain("flex-wrap");
+      cleanup();
+      mount();
+      expect(screen.getByRole("group").className).not.toContain("flex-wrap");
+   });
+
+   it("una opción `disabled` no se puede elegir: ni cambia el valor ni llama a onchange, y se ve atenuada", async () => {
+      const onchange = vi.fn();
+      mount({ onchange, options: [OPTIONS[0], { ...OPTIONS[1], disabled: true }] });
+      expect(button(/Video/).disabled).toBe(true);
+      expect(button(/Video/).className).toContain("opacity-30");
+      expect(button(/Audio/).disabled).toBe(false);
+      await fireEvent.click(button(/Video/));
+      expect(value()).toBe("audio");
+      expect(onchange).not.toHaveBeenCalled();
+   });
+
+   it("una opción `disabled` que es el valor seleccionado se sigue viendo seleccionada", () => {
+      mount({ initial: "video", options: [OPTIONS[0], { ...OPTIONS[1], disabled: true }] });
+      expect(button(/Video/).getAttribute("aria-pressed")).toBe("true");
+      expect(button(/Video/).className).toContain("bg-indigo-600 text-white");
+      expect(button(/Video/).className).not.toContain("opacity-30");
+   });
+
+   it("admite valores booleanos", async () => {
+      mount({ options: [{ value: true, label: "Sí" }, { value: false, label: "No" }], initial: true });
+      await fireEvent.click(button("No"));
+      expect(value()).toBe("false");
+      expect(button("No").getAttribute("aria-pressed")).toBe("true");
+   });
 });
