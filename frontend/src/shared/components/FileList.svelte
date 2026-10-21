@@ -3,6 +3,7 @@
    * FileList.svelte
    * ────────────────
    * Lista de archivos seleccionados con auto-hint, scroll y selección manual.
+   * Se alimenta de useFileSelection (selection.files, selection.hint...).
    *
    * Props:
    *   fileInfos   object[]  — lista de { name, size_mb, path, ... }
@@ -35,6 +36,7 @@
     </span>
     {#if onPickFiles}
       <button
+        type="button"
         class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors
                disabled:opacity-40"
         onclick={onPickFiles}
@@ -63,7 +65,9 @@
             {/if}
             {#if onRemove}
               <button
+                type="button"
                 class="text-white/20 hover:text-red-400 transition-colors disabled:opacity-40"
+                aria-label="Quitar {file.name}"
                 onclick={() => onRemove(file.path)}
                 {disabled}
               >✕</button>

@@ -226,10 +226,122 @@ describe("MergeView: plan desde el backend", () => {
       await pickFiles();
       await settle();
       expect(runButton().disabled).toBe(false);
-      await fireEvent.click(screen.getAllByRole("button", { name: "✕" })[0]);
+      await fireEvent.click(screen.getAllByRole("button", { name: /^Quitar / })[0]);
       await settle();
       expect(runButton().disabled).toBe(true);
       expect(screen.queryByText("→ Proj.mp3")).toBeNull();
+   });
+});
+
+const baseFolderButton = () => screen.getByText("C:/Proj").closest("button");
+const nameInput = () => screen.getByLabelText("Nombre de salida");
+
+describe("MergeView: archivos", () => {
+   async function chooseBaseFolder(folder = "C:/Nuevo", scanResult = { files: PATHS, error: null }) {
+      bridge.pick_folder.mockResolvedValue(folder);
+      bridge.scan_media_folder.mockResolvedValue(scanResult);
+      bridge.get_file_info.mockImplementation(async (p) => ({ name: p.split("/").pop(), size_mb: 7, duration_seconds: 120 }));
+      await fireEvent.click(baseFolderButton());
+      await flush();
+      await flush();
+   }
+
+   it("al elegir la carpeta base detecta los archivos, avisa cuántos y propone el nombre de salida", async () => {
+      await chooseBaseFolder();
+      expect(bridge.scan_media_folder).toHaveBeenCalledWith("C:/Nuevo", "audio");
+      expect(screen.getByText("a.mp3")).toBeTruthy();
+      expect(screen.getByText("b.mp3")).toBeTruthy();
+      expect(screen.getByText("✓ 2 archivo(s) detectados").className).toContain("text-emerald-400");
+      expect(appConfig.baseFolder).toBe("C:/Nuevo");
+      expect(nameInput().value).toBe("Nuevo");
+   });
+
+   it("en modo video escanea videos", async () => {
+      await fireEvent.click(mediaButton(/Video/));
+      await flush();
+      await chooseBaseFolder("C:/Nuevo", { files: ["C:/Nuevo/videos/a.mp4", "C:/Nuevo/videos/b.mp4"], error: null });
+      expect(bridge.scan_media_folder).toHaveBeenCalledWith("C:/Nuevo", "video");
+   });
+
+   it("cancelar el diálogo de carpeta no cambia nada", async () => {
+      bridge.pick_folder.mockResolvedValue(null);
+      await fireEvent.click(baseFolderButton());
+      await flush();
+      expect(bridge.scan_media_folder).not.toHaveBeenCalled();
+      expect(appConfig.baseFolder).toBe("C:/Proj");
+   });
+
+   it("un error del escaneo se muestra en amarillo y deja la lista vacía", async () => {
+      await chooseBaseFolder("C:/Nuevo", { files: [], error: "No existe la carpeta ./audios" });
+      expect(screen.getByText("⚠ No existe la carpeta ./audios").className).toContain("text-yellow-400");
+      expect(screen.queryByText("a.mp3")).toBeNull();
+   });
+
+   it.each([
+      ["audio", "⚠ No se encontraron archivos en ./audios"],
+      ["video", "⚠ No se encontraron archivos en ./videos"],
+   ])("si la carpeta no tiene %s, lo dice", async (type, message) => {
+      if (type === "video") {
+         await fireEvent.click(mediaButton(/Video/));
+         await flush();
+      }
+      await chooseBaseFolder("C:/Nuevo", { files: [], error: null });
+      expect(screen.getByText(message)).toBeTruthy();
+   });
+
+   it("REGRESIÓN: un archivo que desaparece entre el escaneo y la lectura ya no rompe la carga", async () => {
+      bridge.pick_folder.mockResolvedValue("C:/Nuevo");
+      bridge.scan_media_folder.mockResolvedValue({ files: [...PATHS, "C:/Proj/audios/c.mp3"], error: null });
+      bridge.get_file_info.mockImplementation(async (p) => {
+         if (p.endsWith("b.mp3")) throw new Error("[Errno 2] No such file or directory");
+         return { name: p.split("/").pop(), size_mb: 7, duration_seconds: 120 };
+      });
+      await fireEvent.click(baseFolderButton());
+      await flush();
+      await flush();
+
+      expect(screen.getByText("a.mp3")).toBeTruthy();
+      expect(screen.getByText("c.mp3")).toBeTruthy();
+      expect(screen.queryByText("b.mp3")).toBeNull();
+      expect(screen.getByText("⚠ 2 archivo(s) detectados; 1 no se pudieron leer").className).toContain("text-yellow-400");
+   });
+
+   it("la selección manual filtra por las extensiones del backend y parte de la carpeta base", async () => {
+      await pickFiles();
+      expect(bridge.pick_files).toHaveBeenCalledWith(["*.mp3", "*.wav"], "C:/Proj", "audio");
+   });
+
+   it("cancelar la selección manual conserva lo que ya había", async () => {
+      await pickFiles();
+      bridge.pick_files.mockResolvedValue(null);
+      await fireEvent.click(screen.getByRole("button", { name: "Seleccionar manualmente" }));
+      await flush();
+      expect(screen.getByText("a.mp3")).toBeTruthy();
+   });
+
+   it("la selección manual propone el nombre de salida a partir de la carpeta base", async () => {
+      await pickFiles();
+      expect(nameInput().value).toBe("Proj");
+   });
+
+   it("el nombre que el usuario ya escribió no se pisa al cargar archivos", async () => {
+      await fireEvent.input(nameInput(), { target: { value: "Mi merge" } });
+      await pickFiles();
+      expect(nameInput().value).toBe("Mi merge");
+   });
+
+   it("elegir otra carpeta base restablece el nombre de salida", async () => {
+      await pickFiles();
+      expect(nameInput().value).toBe("Proj");
+      await chooseBaseFolder("C:/Otro");
+      expect(nameInput().value).toBe("Otro");
+   });
+
+   it("quitar un archivo lo saca de la lista", async () => {
+      await pickFiles();
+      await fireEvent.click(screen.getByRole("button", { name: "Quitar a.mp3" }));
+      expect(screen.queryByText("a.mp3")).toBeNull();
+      expect(screen.getByText("b.mp3")).toBeTruthy();
    });
 });
 
