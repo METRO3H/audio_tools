@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import dataclasses
@@ -115,7 +114,7 @@ class TranslateRunner:
         on_queue_done: Callable[[int, int, bool], None] | None = None,  # MODIFICADO: añadir cancelled
         on_block_stream: Callable[[int, str], None] | None = None,
         on_block_input: Callable[[int, str], None] | None = None,
-        on_system_prompt: Callable[[str], None] | None = None,
+        on_system_prompt: Callable[[str, dict], None] | None = None,
         on_stats: Callable[[int | None, dict], None] | None = None,
     ) -> None:
         self._cancelled = False
@@ -277,9 +276,18 @@ class TranslateRunner:
             # 3 — Prompt de sistema final
             system_prompt = build_system_prompt(base_prompt, glossary, title, work_info)
 
-            # Emitir system prompt para el frontend
+            # Emitir system prompt para el frontend: el texto final completo (para la vista
+            # "raw") y sus secciones ya separadas (para la vista "formatted") — se arman acá,
+            # no parseando system_prompt del otro lado, porque los separadores textuales
+            # ("[Glossary — ...]", "[Work info — ...]") no son estables entre build_system_prompt
+            # y cualquier parser que intente reconocerlos después.
             if on_system_prompt:
-                on_system_prompt(system_prompt)
+                on_system_prompt(system_prompt, {
+                    "base_prompt": base_prompt.strip(),
+                    "glossary": glossary.strip(),
+                    "work_info": work_info.strip() if work_info else "",
+                    "title": title.strip() if title else "",
+                })
 
             # 4 — Cola de archivos
             step("blocks", "active")
@@ -468,4 +476,3 @@ class TranslateRunner:
 
             if on_stats:
                 on_stats(run_id, dataclasses.asdict(run_stats))
-

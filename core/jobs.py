@@ -174,10 +174,10 @@ def _sequential_callbacks(events: JobEvents, total: int):
     """
     Callbacks estándar para FFmpegRunner.run_sequential.
 
-    Mantiene exactamente la semántica de progreso que tenía
-    api._make_sequential_callbacks (que sigue en uso para las tools aún no
-    migradas): `value` es el avance global; `file_progress`, el del archivo en
-    curso.
+    Mantiene exactamente la semántica de progreso que tenía la antigua
+    api._make_sequential_callbacks (retirada: ya no tenía usos, las tools
+    que la usaban están todas migradas a este contrato): `value` es el
+    avance global; `file_progress`, el del archivo en curso.
     """
     state = {"current": 0}
 

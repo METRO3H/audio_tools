@@ -149,10 +149,12 @@
    }
 
    // System prompt (para el modal de prompt completo)
-   let systemPrompt = $state("");
+   let systemPrompt = $state(""); // texto final completo, para la vista "raw"
+   let systemPromptSections = $state({ base_prompt: "", glossary: "", work_info: "", title: "" });
 
    function onSystemPrompt(e) {
       systemPrompt = e.detail.text;
+      systemPromptSections = e.detail.sections ?? systemPromptSections;
    }
 
    // Cancelación
@@ -186,43 +188,17 @@
    let promptViewMode = $state('formatted'); // 'formatted' | 'raw'
    let promptTab = $state('instructions'); // tabs verticales: instructions, glossary, workInfo, title, context, block
 
-   // Funciones para parsear el system prompt
-   function parseSystemPrompt(text) {
-      if (!text) return { base: '', glossary: '', workInfo: '', title: '' };
-
-      let base = text;
-      let glossary = '';
-      let workInfo = '';
-      let title = '';
-
-      // Extraer [Glossary]
-      const glossaryMatch = text.match(/\[Glossary\s*[-–—]?\s*use these renderings when the term appears\]:\s*([\s\S]*?)(?=\n\n\[Work info\]|$)/i);
-      if (glossaryMatch) {
-         glossary = glossaryMatch[1].trim();
-         base = base.replace(glossaryMatch[0], '');
-      }
-
-      // Extraer [Work info]
-      const workInfoMatch = text.match(/\[Work info\s*[-–—]?\s*persistent context for this work\]:\s*([\s\S]*?)(?=\n\n\[Translated title\]|$)/i);
-      if (workInfoMatch) {
-         workInfo = workInfoMatch[1].trim();
-         base = base.replace(workInfoMatch[0], '');
-      }
-
-      // Extraer [Translated title]
-      const titleMatch = text.match(/\[Translated title\]:\s*([\s\S]*?)(?=\n\n|$)/i);
-      if (titleMatch) {
-         title = titleMatch[1].trim();
-         base = base.replace(titleMatch[0], '');
-      }
-
-      // Limpiar el base de saltos de línea extra y espacios
-      base = base.replace(/\n{3,}/g, '\n\n').trim();
-
-      return { base, glossary, workInfo, title };
-   }
-
-   const parsedSystem = $derived(parseSystemPrompt(systemPrompt));
+   // Las secciones llegan ya separadas del backend (audiotools:translate:system_prompt ·
+   // sections): antes se reparseaba `systemPrompt` acá con una regex que buscaba literalmente
+   // "[Work info]" y nunca coincidía con el texto real que arma build_system_prompt
+   // ("[Work info — persistent context for this work]"), así que la sección Glossary se
+   // tragaba work info y título completos.
+   const parsedSystem = $derived({
+      base: systemPromptSections.base_prompt || "",
+      glossary: systemPromptSections.glossary || "",
+      workInfo: systemPromptSections.work_info || "",
+      title: systemPromptSections.title || "",
+   });
 
    // Funciones para extraer contexto y bloque del user message
    function extractContext(userMessage) {

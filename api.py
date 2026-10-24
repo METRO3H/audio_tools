@@ -16,7 +16,7 @@ Convención de eventos JS:
     audiotools:translate:stats   { detail: { run_id: int|null, ...RunStats } } — una vez, al terminar
     audiotools:translate:block_stream  { detail: { file_index: int, text: str } }
     audiotools:translate:block_input   { detail: { file_index: int, text: str } }
-    audiotools:translate:system_prompt { detail: { text: str } }
+    audiotools:translate:system_prompt { detail: { text: str, sections: {base_prompt, glossary, work_info, title} } }
 
 Las tools migradas al contrato de core/jobs.py (hoy: diverge) reciben un
 objeto de opciones con job_id, emiten audiotools:start y agregan job_id a
@@ -108,48 +108,37 @@ def _paths(raw: list[str]) -> list[Path]:
     return [Path(p) for p in raw]
 
 
-def _make_sequential_callbacks(window: webview.Window, total: int):
+def _check_mediator(get_models) -> dict:
     """
-    Genera los callbacks estándar para run_sequential.
-    Retorna (on_log, on_progress, on_file_start, on_file_done, on_done_wrapper)
-    donde on_done_wrapper llama a on_done(success) con el resultado.
+    Descubre el mediador en la red (discovery UDP) y, si lo encuentra, pregunta su estado y la
+    lista de modelos que `get_models(client)` decida pedirle (whisper o .gguf, según quién
+    llame). Nunca lanza excepción: cualquier problema de red o de protocolo se traduce en
+    {"found": False}. Común a check_remote_server() y check_remote_translation_server(): el
+    mediador solo soporta un job a la vez sea cual sea el tipo, así que "ocupado" (status.state)
+    significa lo mismo para las dos.
     """
-    progress_state = {'current': 0}
+    from core.network.mediator_client import MediatorClient, discover_mediator
 
-    def on_log(msg: str):
-        _emit(window, "audiotools:log", {"message": msg})
+    found = discover_mediator()
+    if found is None:
+        return {"found": False}
 
-    def on_progress(value: float):
-        current = progress_state['current']
-        global_value = (current + value) / total
-        _emit(window, "audiotools:progress", {
-            "value":         global_value,
-            "file_index":    current,
-            "file_progress": value,
-            "completed":     current,
-            "total":         total,
-        })
+    try:
+        client = MediatorClient(found.host, found.port)
+        status = client.get_status()
+        models = get_models(client)
+    except Exception:
+        return {"found": False}
 
-    def on_file_start(i: int):
-        progress_state['current'] = i
-        _emit(window, "audiotools:progress", {
-            "value":         i / total,
-            "file_index":    i,
-            "file_progress": 0,
-            "completed":     i,
-            "total":         total,
-        })
+    return {
+        "found": True,
+        "host": found.host,
+        "port": found.port,
+        "state": status["state"],
+        "busy_model": status["model"],
+        "models": models,
+    }
 
-    def on_file_done(i: int):
-        _emit(window, "audiotools:progress", {
-            "value":         (i + 1) / total,
-            "file_index":    i,
-            "file_progress": 1,
-            "completed":     i + 1,
-            "total":         total,
-        })
-
-    return on_log, on_progress, on_file_start, on_file_done
 
 # — API —————————————————————————————————————————————————————————————————————
 
@@ -430,27 +419,7 @@ class AudioToolsAPI:
         necesite tres viajes separados. Nunca lanza excepción: cualquier
         problema de red se traduce en {"found": False}.
         """
-        from core.network.mediator_client import MediatorClient, discover_mediator
-
-        found = discover_mediator()
-        if found is None:
-            return {"found": False}
-
-        try:
-            client = MediatorClient(found.host, found.port)
-            status = client.get_status()
-            models = client.get_available_models()
-        except Exception:
-            return {"found": False}
-
-        return {
-            "found": True,
-            "host": found.host,
-            "port": found.port,
-            "state": status["state"],
-            "busy_model": status["model"],
-            "models": models,
-        }
+        return _check_mediator(lambda client: client.get_available_models())
 
     def check_remote_translation_server(self) -> dict:
         """
@@ -460,27 +429,7 @@ class AudioToolsAPI:
         mismo para las dos), pero devuelve los modelos .gguf disponibles
         en vez de los de whisper. Nunca lanza excepción.
         """
-        from core.network.mediator_client import MediatorClient, discover_mediator
-
-        found = discover_mediator()
-        if found is None:
-            return {"found": False}
-
-        try:
-            client = MediatorClient(found.host, found.port)
-            status = client.get_status()
-            models = client.get_translation_models()
-        except Exception:
-            return {"found": False}
-
-        return {
-            "found": True,
-            "host": found.host,
-            "port": found.port,
-            "state": status["state"],
-            "busy_model": status["model"],
-            "models": models,
-        }
+        return _check_mediator(lambda client: client.get_translation_models())
 
     def plan_transcribe(self, options: dict) -> dict:
         """
@@ -892,9 +841,9 @@ class AudioToolsAPI:
             _emit(self._window, "audiotools:translate:block_input",
                   {"file_index": file_index, "text": text})
 
-        def on_system_prompt(text):
+        def on_system_prompt(text, sections):
             _emit(self._window, "audiotools:translate:system_prompt",
-                  {"text": text})
+                  {"text": text, "sections": sections})
 
         def on_stats(run_id, stats):
             _emit(self._window, "audiotools:translate:stats",

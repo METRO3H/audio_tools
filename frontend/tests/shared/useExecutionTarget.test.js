@@ -57,7 +57,7 @@ describe("useExecutionTarget", () => {
       const { target } = make({ found: true, state, busy_model: "large-v3" });
       await target.selectRemote();
       expect(target.mode).toBeNull();
-      expect(target.error).toBe("El mediador está ocupado en este momento (modelo: large-v3). Probá de nuevo en un rato.");
+      expect(target.error).toBe("El mediador está ocupado en este momento (modelo: large-v3). Inténtalo de nuevo en un rato.");
    });
 
    it("ocupado sin saber el modelo", async () => {

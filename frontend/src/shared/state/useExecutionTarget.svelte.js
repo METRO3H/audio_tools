@@ -48,7 +48,7 @@ export function useExecutionTarget({ check }) {
          if (result.state === "busy" || result.state === "loading") {
             error = `El mediador está ocupado en este momento (modelo: ${
                result.busy_model ?? "desconocido"
-            }). Probá de nuevo en un rato.`;
+            }). Inténtalo de nuevo en un rato.`;
             return;
          }
 
