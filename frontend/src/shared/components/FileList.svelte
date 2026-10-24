@@ -13,7 +13,13 @@
    *   disabled    boolean
    *   emptyText   string    — texto cuando no hay archivos
    *   label       string    — label del campo (default 'Archivos')
+   *   loading     boolean   — mientras se escanea o se lee información: un "Cargando archivos..." con
+   *                           spinner en lugar de la lista (se alimenta de selection.loading)
+   *   height      'auto' | 'fixed' — 'auto' (por defecto): la lista crece hasta un máximo; 'fixed': una
+   *                           caja de altura reservada (≈5 filas) que evita saltos de layout al cargar
    */
+
+  import Spinner from '@shared/ui/Spinner.svelte'
 
   let {
     fileInfos  = [],
@@ -23,7 +29,11 @@
     disabled   = false,
     emptyText  = 'Selecciona una carpeta base primero',
     label      = 'Archivos',
+    loading    = false,
+    height     = 'auto',
   } = $props()
+
+  const fixed = $derived(height === 'fixed')
 </script>
 
 <div class="flex flex-col gap-1.5">
@@ -53,8 +63,8 @@
     </span>
   {/if}
 
-  {#if fileInfos.length}
-    <ul class="flex flex-col gap-1 overflow-y-auto max-h-40">
+  {#snippet list()}
+    <ul class="flex flex-col gap-1 {fixed ? '' : 'overflow-y-auto max-h-40'}">
       {#each fileInfos as file (file.path)}
         <li class="flex items-center justify-between rounded-lg
                    bg-white/5 px-3 py-1.5 text-xs text-white/60 shrink-0">
@@ -76,6 +86,34 @@
         </li>
       {/each}
     </ul>
+  {/snippet}
+
+  {#if fixed}
+    <div
+      class="h-44 overflow-y-auto rounded-lg border border-white/5 bg-black/10 p-1.5"
+      style="scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;"
+    >
+      {#if loading}
+        <div class="flex h-full items-center justify-center gap-2 text-xs text-white/40">
+          <Spinner size={16} duration="1.25s" />
+          <span>Cargando archivos...</span>
+        </div>
+      {:else if fileInfos.length}
+        {@render list()}
+      {:else}
+        <div class="flex h-full items-center justify-center px-4 text-center text-xs text-white/20">
+          {emptyText}
+        </div>
+      {/if}
+    </div>
+  {:else if loading}
+    <div class="flex items-center justify-center gap-2 rounded-lg border border-dashed border-white/10
+                p-4 text-xs text-white/40">
+      <Spinner size={16} duration="1.25s" />
+      <span>Cargando archivos...</span>
+    </div>
+  {:else if fileInfos.length}
+    {@render list()}
   {:else}
     <div class="rounded-lg border border-dashed border-white/10 p-4
                 text-center text-xs text-white/20">

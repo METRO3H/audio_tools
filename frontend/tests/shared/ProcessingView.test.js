@@ -1,4 +1,4 @@
-import { render, screen, cleanup } from "@testing-library/svelte";
+import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
@@ -178,3 +178,30 @@ describe("ProcessingView: cancelación", () => {
       expect(statusSpan("Cancelado").className).toContain("text-amber-400");
    });
 });
+
+describe("ProcessingView: logs por archivo", () => {
+   const fileLog = (index, message) =>
+      emit("audiotools:transcribe:file_log", { job_id: "J1", file_index: index, message });
+
+   it("con enableFileLogs, pulsar un archivo abre sus logs, tomados del store", async () => {
+      mount({ enableFileLogs: true });
+      fileLog(0, "[0.00s -> 1.00s] hola");
+      fileLog(1, "no es de este archivo");
+      await flush();
+
+      await fireEvent.click(screen.getByText("a.mp3"));
+      await flush();
+      expect(screen.getByText("[0.00s -> 1.00s] hola")).toBeTruthy();
+      expect(screen.queryByText("no es de este archivo")).toBeNull();
+   });
+
+   it("sin enableFileLogs, pulsar un archivo no abre nada", async () => {
+      mount();
+      fileLog(0, "[0.00s -> 1.00s] hola");
+      await flush();
+      await fireEvent.click(screen.getByText("a.mp3"));
+      await flush();
+      expect(screen.queryByText("[0.00s -> 1.00s] hola")).toBeNull();
+   });
+});
+

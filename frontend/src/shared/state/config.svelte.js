@@ -15,6 +15,9 @@
  *   appConfig.videoEncoding       // capacidades de Audio→Video, del backend (ver core/video_encoding.py):
  *                                 // { encoders: [{id,label}], encoder_priority, presets, default_presets,
  *                                 //   fps, resolutions, quality_range }
+ *   appConfig.transcription       // capacidades de Transcribe, del backend (ver core/transcription/options.py):
+ *                                 // { model_sizes, devices, compute_types, beam_sizes, languages: [{code,label}],
+ *                                 //   output_formats, defaults: {model_size, device, ..., initial_prompt} }
  *   appConfig.setBaseFolder(path) // actualiza la carpeta base
  *   await appConfig.init()        // carga config desde el backend
  */
@@ -37,16 +40,25 @@ export const appConfig = $state({
       resolutions: [],
       quality_range: [0, 51],
    },
+   transcription: {
+      model_sizes: [],
+      devices: [],
+      compute_types: {},
+      beam_sizes: [],
+      languages: [],
+      output_formats: [],
+      defaults: {},
+   },
    loaded: false,
 
    async init() {
       const cfg = await bridge.get_config();
       this.baseFolder = cfg.default_base_folder;
       this.defaultBaseFolder = cfg.default_base_folder;
-      this.transcribeInitialPrompt = cfg.transcribe_initial_prompt ?? "";
       this.mediaExtensions = cfg.media_extensions ?? { audio: [], video: [] };
       this.outputFormats = cfg.output_formats ?? { audio: [], video: [] };
       if (cfg.video_encoding) this.videoEncoding = cfg.video_encoding;
+      if (cfg.transcription) this.transcription = cfg.transcription;
       this.loaded = true;
    },
 

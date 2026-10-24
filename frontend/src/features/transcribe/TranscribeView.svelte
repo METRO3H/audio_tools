@@ -1,581 +1,369 @@
 <script>
-   import { onDestroy } from "svelte";
    import { bridge } from "@shared/services/bridge.svelte.js";
    import { progress } from "@shared/state/progress.svelte.js";
    import { appConfig } from "@shared/state/config.svelte.js";
+   import { useToolRun } from "@shared/state/useToolRun.svelte.js";
+   import { persisted } from "@shared/state/persisted.svelte.js";
+   import { usePlan } from "@shared/state/usePlan.svelte.js";
+   import { useFileSelection } from "@shared/state/useFileSelection.svelte.js";
+   import { useExecutionTarget } from "@shared/state/useExecutionTarget.svelte.js";
 
    import ProcessingView from "@shared/components/ProcessingView.svelte";
    import ViewHeader from "@shared/components/ViewHeader.svelte";
-   import HoverCard from "@shared/ui/HoverCard.svelte";
+   import ExecutionModeGate from "@shared/components/ExecutionModeGate.svelte";
+   import FileList from "@shared/components/FileList.svelte";
    import Modal from "@shared/ui/Modal.svelte";
    import Field from "@shared/ui/Field.svelte";
+   import SegmentedControl from "@shared/ui/SegmentedControl.svelte";
    import SwitchField from "@shared/ui/SwitchField.svelte";
    import BaseFolderPicker from "@shared/components/BaseFolderPicker.svelte";
-   import Spinner from "@shared/ui/Spinner.svelte";
-   import { persistentConfig } from "@shared/services/persistentConfig.js";
 
    let { goHome } = $props();
 
-   // ── Selección local / remoto ─────────────────────────────────────────────────
-   let mode = $state(null);
-   let checkingRemote = $state(false);
-   let remoteError = $state("");
-   let remoteInfo = $state(null);
+   const job = useToolRun("run_transcribe");
 
-   // ── Constantes ───────────────────────────────────────────────────────────────
+   // ── Dónde se ejecuta: esta PC o el mediador de la red ────────────────────────
+   const target = useExecutionTarget({ check: () => bridge.check_remote_server() });
 
-   const MODEL_SIZES = ["tiny", "base", "small", "medium", "large-v1", "large-v2", "large-v3"];
-   const DEVICES = ["cuda", "cpu"];
-   const COMPUTE_BY_DEVICE = {
-      cuda: ["float16", "int8_float16", "int8"],
-      cpu: ["float32", "int8"],
-   };
-   const LANGUAGES = [
-      { code: "ja", label: "japanese" },
-      { code: "zh", label: "chinese" },
-   ];
-
-   const LANGUAGE_FOLDERS = {
-      ja: "japanese",
-      zh: "chinese",
-   };
-
-   const OUTPUT_FORMATS = ["srt", "vtt", "txt"];
-   const AUDIO_EXTS = ["*.mp3", "*.wav", "*.m4a", "*.aac", "*.ogg", "*.flac", "*.opus"];
-   const BEAM_SIZES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-
-   // ── Estado ───────────────────────────────────────────────────────────────────
-
-   let processing = $state(false);
-   let fileInfos = $state([]);
-   let fileLogsByIndex = $state({});
-   let autoHint = $state("");
-
-   function onTranscribeFileLog(event) {
-      const { file_index, message } = event.detail ?? {};
-      if (!Number.isInteger(file_index) || file_index < 0) return;
-
-      fileLogsByIndex = {
-         ...fileLogsByIndex,
-         [file_index]: [...(fileLogsByIndex[file_index] ?? []), String(message ?? "")],
-      };
-   }
-
-   if (typeof window !== "undefined") {
-      window.addEventListener("audiotools:transcribe:file_log", onTranscribeFileLog);
-   }
-
-   onDestroy(() => {
-      if (typeof window !== "undefined") {
-         window.removeEventListener("audiotools:transcribe:file_log", onTranscribeFileLog);
-      }
+   // ── Preferencias que se recuerdan entre sesiones ─────────────────────────────
+   // `null` = "el valor por defecto del backend" (core/transcription/options.py): solo se guarda lo
+   // que el USUARIO elige, así que un valor recordado nunca queda atrapado por haber sido el
+   // defecto de otra época (p. ej. el prompt de config.py). Lo guardado que ya no sirva se
+   // resuelve más abajo sin tocar lo guardado.
+   // `outputSubfolder: ""` = "la carpeta del idioma".
+   const cfg = persisted("transcribe_config", {
+      modelSize: null,
+      device: null,
+      computeType: null,
+      beamSize: null,
+      language: null,
+      vadFilter: null,
+      conditionOnPrev: null,
+      wordTimestamps: null,
+      initialPrompt: null,
+      outputFormat: null,
+      outputSubfolder: "",
    });
 
-   // Parámetros del modelo
-   let modelSize = $state("large-v3");
-   let device = $state("cuda");
-   let computeType = $state("int8_float16");
-   let beamSize = $state(5);
+   // Lo que el backend sabe hacer (modelos, dispositivos, idiomas...) y sus valores por defecto.
+   const caps = $derived(appConfig.transcription);
+   const defaults = $derived(caps.defaults);
 
-   // Parámetros de transcripción
-   let language = $state("ja");
-   let vadFilter = $state(true);
-   let conditionOnPrev = $state(false);
-   let wordTimestamps = $state(true);
-   let initialPrompt = $state("");
-   let outputFormat = $state("srt");
-   let outputSubfolder = $state("japanese");
-   let showAdditionalOptions = $state(false);
-   let loadingFiles = $state(false);
+   // Nombres de carpeta que versiones anteriores guardaban como "la del idioma".
+   const LEGACY_DEFAULT_FOLDERS = ["default", "ja", "zh", "auto", "korean", "spanish", "english", "japanese", "chinese"];
 
-   // Bandera para evitar que el efecto de guardado pise la config persistida
-   // con los valores default antes de que el efecto de carga termine.
-   let configLoaded = $state(false);
+   // ── Valores efectivos ────────────────────────────────────────────────────────
 
-   // ── Cargar configuración guardada ────────────────────────────────────────────
+   const isBool = (value, fallback) => (typeof value === "boolean" ? value : fallback);
 
-   $effect(() => {
-      const saved = persistentConfig.get("transcribe_config");
-      if (saved) {
-         const savedLanguage = ["ja", "zh"].includes(saved.language)
-            ? saved.language
-            : saved.language === "chinese"
-              ? "zh"
-              : "ja";
+   const device = $derived(caps.devices.includes(cfg.device) ? cfg.device : defaults.device);
+   const computeOptions = $derived(caps.compute_types[device] ?? []);
+   // El compute type guardado vale solo para los dispositivos que lo admiten: al pasar a CPU se
+   // usa uno de CPU, y al volver a CUDA reaparece el que había.
+   const computeType = $derived(
+      computeOptions.includes(cfg.computeType)
+         ? cfg.computeType
+         : computeOptions.includes(defaults.compute_type)
+           ? defaults.compute_type
+           : (computeOptions[0] ?? ""),
+   );
+   const beamSize = $derived(caps.beam_sizes.includes(cfg.beamSize) ? cfg.beamSize : defaults.beam_size);
+   const outputFormat = $derived(caps.output_formats.includes(cfg.outputFormat) ? cfg.outputFormat : defaults.output_format);
+   const vadFilter = $derived(isBool(cfg.vadFilter, defaults.vad_filter));
+   const conditionOnPrev = $derived(isBool(cfg.conditionOnPrev, defaults.condition_on_previous_text));
+   const wordTimestamps = $derived(isBool(cfg.wordTimestamps, defaults.word_timestamps));
+   const initialPrompt = $derived(typeof cfg.initialPrompt === "string" ? cfg.initialPrompt : (defaults.initial_prompt ?? ""));
 
-         modelSize = saved.modelSize ?? "large-v3";
-         device = saved.device ?? "cuda";
-         computeType = saved.computeType ?? "int8_float16";
-         beamSize = saved.beamSize ?? 5;
-         language = savedLanguage;
-         vadFilter = saved.vadFilter ?? true;
-         conditionOnPrev = saved.conditionOnPrev ?? false;
-         wordTimestamps = saved.wordTimestamps ?? true;
-         initialPrompt = saved.initialPrompt ?? "";
-         outputFormat = saved.outputFormat ?? "srt";
+   // Idioma: el guardado puede ser el código (ja) o, en versiones viejas, el nombre (chinese).
+   const language = $derived(
+      (
+         caps.languages.find((l) => l.code === cfg.language) ??
+         caps.languages.find((l) => l.label === cfg.language) ??
+         caps.languages.find((l) => l.code === defaults.language)
+      )?.code ?? "",
+   );
+   const languageLabel = $derived(caps.languages.find((l) => l.code === language)?.label ?? "");
 
-         const savedSubfolder = saved.outputSubfolder;
-         outputSubfolder =
-            !savedSubfolder ||
-            ["default", "ja", "zh", "auto", "korean", "spanish", "english", "japanese", "chinese"].includes(
-               savedSubfolder,
-            )
-               ? LANGUAGE_FOLDERS[savedLanguage]
-               : savedSubfolder;
+   // Subcarpeta que escribió el usuario ("" = la del idioma).
+   const subfolderInput = $derived(LEGACY_DEFAULT_FOLDERS.includes(cfg.outputSubfolder) ? "" : cfg.outputSubfolder);
 
-         if (!COMPUTE_BY_DEVICE[device]?.includes(computeType)) {
-            computeType = COMPUTE_BY_DEVICE[device]?.[0] ?? "int8_float16";
-         }
-      }
-
-      // Inicializar desde config.py si no hay guardado.
-      if (!saved && appConfig.loaded) {
-         initialPrompt = appConfig.transcribeInitialPrompt ?? "";
-      }
-
-      configLoaded = true;
-   });
-
-   function changeLanguage(code) {
-      language = code;
-      outputSubfolder = LANGUAGE_FOLDERS[code];
-   }
-
-   function changeDevice(nextDevice) {
-      device = nextDevice;
-      if (!COMPUTE_BY_DEVICE[nextDevice].includes(computeType)) {
-         computeType = COMPUTE_BY_DEVICE[nextDevice][0];
-      }
-   }
-
-   // ── Guardar configuración al cambiar ────────────────────────────────────────
-   // Solo guarda una vez que el efecto de carga ya corrió, para no pisar la
-   // config persistida con los valores default en el primer mount.
-
-   $effect(() => {
-      if (!configLoaded) return;
-      persistentConfig.set("transcribe_config", {
-         modelSize,
-         device,
-         computeType,
-         beamSize,
-         language,
-         vadFilter,
-         conditionOnPrev,
-         wordTimestamps,
-         initialPrompt,
-         outputFormat,
-         outputSubfolder,
-      });
-   });
-
-   // ── Derivados ────────────────────────────────────────────────────────────────
-
-   const outputPath = $derived(
-      appConfig.baseFolder ? `${appConfig.baseFolder}\\transcriptions\\${outputSubfolder}` : "",
+   // Modelo: con un mediador remoto, el de su lista (sin tocar lo guardado para el uso local).
+   const modelOptions = $derived(target.mode === "remote" && target.remote ? target.remote.models : caps.model_sizes);
+   const modelSize = $derived(
+      target.mode === "remote"
+         ? modelOptions.includes(cfg.modelSize)
+            ? cfg.modelSize
+            : (modelOptions[0] ?? "")
+         : caps.model_sizes.includes(cfg.modelSize)
+           ? cfg.modelSize
+           : defaults.model_size,
    );
 
-   const canRun = $derived(fileInfos.length >= 1 && !!appConfig.baseFolder && !progress.running);
-
-   const modelSizesToShow = $derived(mode === "remote" && remoteInfo ? remoteInfo.models : MODEL_SIZES);
-
-   // ── Carga ────────────────────────────────────────────────────────────────────
-
-   async function loadAudios(folder) {
-      loadingFiles = true;
-      try {
-         const result = await bridge.scan_audio_parts_or_audios(folder);
-         if (result.error) {
-            fileInfos = [];
-            autoHint = `⚠ ${result.error}`;
-            return;
-         }
-         if (!result.files.length) {
-            fileInfos = [];
-            autoHint = "⚠ No se encontraron audios";
-            return;
-         }
-         const infos = await Promise.all(result.files.map((p) => bridge.get_file_info(p)));
-         fileInfos = infos.map((info, i) => ({ ...info, path: result.files[i] }));
-         autoHint = `✓ ${infos.length} archivo(s) detectados desde ${result.source}`;
-      } finally {
-         loadingFiles = false;
-      }
+   function changeLanguage(code) {
+      cfg.language = code;
+      cfg.outputSubfolder = ""; // al cambiar el idioma, la carpeta vuelve a ser la suya
    }
 
-   async function pickFiles() {
-      loadingFiles = true;
-      try {
-         const paths = await bridge.pick_files(AUDIO_EXTS, appConfig.baseFolder, "audio");
-         if (!paths.length) return;
-         const infos = await Promise.all(paths.map((p) => bridge.get_file_info(p)));
-         fileInfos = infos.map((info, i) => ({ ...info, path: paths[i] }));
-         autoHint = "";
-      } finally {
-         loadingFiles = false;
-      }
-   }
+   // ── Archivos ─────────────────────────────────────────────────────────────────
 
-   function removeFile(path) {
-      fileInfos = fileInfos.filter((f) => f.path !== path);
-   }
+   let showAdditionalOptions = $state(false);
 
-   // ── Selección local / remoto ─────────────────────────────────────────────────
+   // Los audios con los que se va a trabajar: se detectan en la carpeta base (./audios/parts o
+   // ./audios) o se eligen a mano.
+   const selection = useFileSelection({
+      scan: (folder) => bridge.scan_audio_parts_or_audios(folder),
+      pick: () =>
+         bridge.pick_files(
+            (appConfig.mediaExtensions.audio ?? []).map((ext) => "*" + ext),
+            appConfig.baseFolder,
+            "audio",
+         ),
+      emptyHint: "No se encontraron audios",
+      formatDetected: (n, result) => `✓ ${n} archivo(s) detectados desde ${result.source}`,
+   });
 
-   function selectLocal() {
-      mode = "local";
-   }
+   const fileInfos = $derived(selection.files);
 
-   async function selectRemote() {
-      checkingRemote = true;
-      remoteError = "";
-      const result = await bridge.check_remote_server();
-      checkingRemote = false;
+   // ── Plan ─────────────────────────────────────────────────────────────────────
 
-      if (!result.found) {
-         remoteError = "No se encontró el server mediador en la red. ¿Está prendido?";
-         return;
-      }
-      if (result.state === "busy" || result.state === "loading") {
-         remoteError = `El mediador está ocupado en este momento (modelo: ${
-            result.busy_model ?? "desconocido"
-         }). Probá de nuevo en un rato.`;
-         return;
-      }
+   // Opciones con las que se pide el plan, o null si todavía no hay con qué planificar. El backend
+   // decide dónde queda cada transcripción, detecta nombres repetidos, valida la subcarpeta y avisa
+   // de las salidas que ya existen. No incluye el prompt: no cambia el plan y se escribe por teclas.
+   const planOptions = $derived.by(() => {
+      if (!target.target || !fileInfos.length || !appConfig.baseFolder || !caps.model_sizes.length) return null;
+      if (target.mode === "remote" && !modelSize) return null;
+      return {
+         file_paths: fileInfos.map((f) => f.path),
+         base_folder: appConfig.baseFolder,
+         model_size: modelSize,
+         device,
+         compute_type: computeType,
+         beam_size: beamSize,
+         language,
+         vad_filter: vadFilter,
+         condition_on_previous_text: conditionOnPrev,
+         word_timestamps: wordTimestamps,
+         output_format: outputFormat,
+         output_subfolder: subfolderInput.trim() || null,
+         target: target.target,
+         durations: fileInfos.map((f) => (f.duration_seconds > 0 ? f.duration_seconds : null)),
+      };
+   });
 
-      remoteInfo = result;
-      if (result.models.length && !result.models.includes(modelSize)) {
-         modelSize = result.models[0];
-      }
-      mode = "remote";
-   }
+   // plan = { output_dir, files: [{ index, name, path, duration, output, output_name, exists }], total_duration } | null
+   const planState = usePlan(() => planOptions, (options) => bridge.plan_transcribe(options));
+   const plan = $derived(planState.value);
+   const planError = $derived(planState.error);
+   const planPending = $derived(planState.pending);
 
-   function changeMode() {
-      mode = null;
-      remoteError = "";
-   }
+   const overwrites = $derived((plan?.files ?? []).filter((f) => f.exists).map((f) => f.output_name));
+
+   // Filas de ProcessingView.
+   const processingFiles = $derived.by(() => {
+      const sizeByPath = new Map(fileInfos.map((f) => [f.path, f.size_mb]));
+      return (plan?.files ?? []).map((f) => ({
+         name: f.name,
+         size_mb: sizeByPath.get(f.path) ?? 0,
+         duration_seconds: f.duration,
+         path: f.path,
+      }));
+   });
+
+   // No se ejecuta con una consulta de plan en vuelo: el plan que se ve podría no ser el último.
+   const canRun = $derived(!!plan && !planPending && !progress.running);
+
+   // ── Derivados de presentación ────────────────────────────────────────────────
+
+   const outputHint = $derived(`transcriptions/${subfolderInput.trim() || languageLabel}/`);
 
    // ── Ejecutar ─────────────────────────────────────────────────────────────────
 
    async function run() {
       if (!canRun) return;
-      progress.reset();
-      fileLogsByIndex = {};
-      processing = true;
-      progress.running = true;
-
-      await bridge.run_transcribe(
-         fileInfos.map((f) => f.path),
-         appConfig.baseFolder,
-         modelSize,
-         device,
-         computeType,
-         outputSubfolder,
-         beamSize,
-         language,
-         vadFilter,
-         conditionOnPrev,
-         wordTimestamps,
-         initialPrompt,
-         outputFormat,
-         mode === "remote" ? remoteInfo.host : null,
-         mode === "remote" ? remoteInfo.port : null,
-      );
-   }
-
-   function cancel() {
-      bridge.cancel();
-   }
-
-   function goBack() {
-      processing = false;
-      progress.reset();
+      await job.start({ ...planOptions, initial_prompt: initialPrompt });
    }
 </script>
 
-{#if mode === null}
-   <div class="flex h-full flex-col">
-      <ViewHeader title="Transcribe" {goHome} />
-
-      <main class="flex flex-1 items-center justify-center px-8">
-         <div class="flex w-full max-w-2xl items-stretch gap-6">
-            <!-- Remoto -->
-            <div class="flex flex-1 flex-col gap-2">
-               <button
-                  class="group flex flex-1 flex-col items-center justify-center gap-3
-                     rounded-2xl border border-white/10 bg-white/5 p-8 text-center
-                     transition-all duration-200 hover:border-white/20 hover:bg-white/10
-                     hover:scale-[1.02] active:scale-[0.98] cursor-pointer
-                     disabled:cursor-wait disabled:opacity-60 disabled:hover:scale-100"
-                  onclick={selectRemote}
-                  disabled={checkingRemote}
-               >
-                  {#if checkingRemote}
-                     <Spinner size={28} />
-                     <span class="text-xs text-white/40">Buscando mediador en la red...</span>
-                  {:else}
-                     <span class="text-3xl">🌐</span>
-                     <span class="text-sm font-semibold text-white tracking-wide"> Transcribir en remoto </span>
-                     <span class="text-xs text-white/50 leading-relaxed">
-                        Usa el server mediador de la red para transcribir sin cargar el modelo en esta PC.
-                     </span>
-                  {/if}
-               </button>
-               {#if remoteError}
-                  <span class="text-xs text-yellow-400 text-center">{remoteError}</span>
-               {/if}
-            </div>
-
-            <!-- Separador vertical -->
-            <div class="w-px self-stretch bg-white/10"></div>
-
-            <!-- Local -->
-            <button
-               class="group flex flex-1 flex-col items-center justify-center gap-3
-                  rounded-2xl border border-white/10 bg-white/5 p-8 text-center
-                  transition-all duration-200 hover:border-white/20 hover:bg-white/10
-                  hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
-               onclick={selectLocal}
-            >
-               <span class="text-3xl">💻</span>
-               <span class="text-sm font-semibold text-white tracking-wide"> Transcribir en esta PC </span>
-               <span class="text-xs text-white/50 leading-relaxed"> Carga el modelo localmente, como siempre. </span>
-            </button>
-         </div>
-      </main>
-   </div>
-{:else if processing}
+{#if target.mode === null}
+   <ExecutionModeGate
+      title="Transcribe"
+      {goHome}
+      {target}
+      remoteTitle="Transcribir en remoto"
+      remoteDescription="Usa el server mediador de la red para transcribir sin cargar el modelo en esta PC."
+      localTitle="Transcribir en esta PC"
+      localDescription="Carga el modelo localmente, como siempre."
+   />
+{:else if job.processing}
    <ProcessingView
       title="Transcribe"
       {goHome}
-      {fileInfos}
-      {outputPath}
+      fileInfos={processingFiles}
+      outputPath={plan?.output_dir ?? ""}
       showOpenFile={false}
       enableFileLogs={true}
-      {fileLogsByIndex}
-      onCancel={cancel}
-      onBack={goBack}
+      onCancel={job.cancel}
+      onBack={job.back}
    />
 {:else}
    <div class="flex h-full flex-col">
-      <ViewHeader title={mode === "remote" ? "Transcribe (remoto)" : "Transcribe"} {goHome} />
+      <ViewHeader title={target.mode === "remote" ? "Transcribe (remoto)" : "Transcribe"} {goHome} />
 
       <main class="flex flex-1 flex-col items-center overflow-y-auto px-8 py-10">
          <div class="flex w-full max-w-lg flex-col gap-5">
             <button
                class="self-start text-xs text-white/30 hover:text-white transition-colors cursor-pointer"
-               onclick={changeMode}
+               onclick={target.change}
             >
                ← Cambiar modo (local/remoto)
             </button>
 
             <!-- Carpeta base con botón abrir -->
-            <BaseFolderPicker onPick={loadAudios} />
+            <BaseFolderPicker onPick={selection.loadFromFolder} />
 
             <!-- Archivos -->
-            <div class="flex flex-col gap-1.5">
-               <div class="flex items-center justify-between">
-                  <span class="text-xs text-white/40">
-                     Archivos
-                     {#if fileInfos.length}
-                        <span class="text-white/20">({fileInfos.length})</span>
-                     {/if}
-                  </span>
-                  <button
-                     class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer"
-                     onclick={pickFiles}
-                  >
-                     Seleccionar manualmente
-                  </button>
-               </div>
+            <FileList
+               fileInfos={selection.files}
+               autoHint={selection.hint}
+               loading={selection.loading}
+               height="fixed"
+               onPickFiles={selection.pickFiles}
+               onRemove={selection.remove}
+               emptyText={appConfig.baseFolder ? "No se encontraron audios" : "Selecciona una carpeta base primero"}
+            />
 
-               {#if autoHint}
-                  <span class="text-xs {autoHint.startsWith('⚠') ? 'text-yellow-400' : 'text-emerald-400'}">
-                     {autoHint}
-                  </span>
-               {/if}
-
-               <!-- Contenedor con altura reservada (≈5 filas) para evitar layout shift -->
-               <div
-                  class="h-44 overflow-y-auto rounded-lg border border-white/5 bg-black/10 p-1.5"
-                  style="scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;"
-               >
-                  {#if loadingFiles}
-                     <div class="flex h-full items-center justify-center gap-2 text-xs text-white/40">
-                        <Spinner size={16} duration="1.25s" />
-                        <span>Cargando archivos...</span>
-                     </div>
-                  {:else if fileInfos.length}
-                     <ul class="flex flex-col gap-1">
-                        {#each fileInfos as file (file.path)}
-                           <li
-                              class="flex items-center justify-between rounded-lg
-                              bg-white/5 px-3 py-1.5 text-xs text-white/60 shrink-0"
-                           >
-                              <span class="truncate">{file.name}</span>
-                              <div class="flex shrink-0 items-center gap-2 ml-2">
-                                 <span class="text-white/30">{file.size_mb} MB</span>
-                                 <button
-                                    class="text-white/20 hover:text-red-400 transition-colors cursor-pointer"
-                                    onclick={() => removeFile(file.path)}>✕</button
-                                 >
-                              </div>
-                           </li>
-                        {/each}
-                     </ul>
-                  {:else}
-                     <div class="flex h-full items-center justify-center px-4 text-center text-xs text-white/20">
-                        {appConfig.baseFolder ? "No se encontraron audios" : "Selecciona una carpeta base primero"}
-                     </div>
-                  {/if}
-               </div>
-            </div>
             <!-- Fila 1: dispositivo -->
-            <div class="flex flex-col gap-1.5">
-               <div class="flex items-center gap-1.5">
-                  <span class="text-xs text-white/40">Device</span>
-                  <HoverCard
-                     text="CUDA usa la GPU NVIDIA para acelerar la transcripción. CPU es más lento pero funciona en cualquier máquina."
-                  />
-               </div>
-               <div class="flex w-full gap-1.5">
-                  {#each DEVICES as d (d)}
-                     <button
-                        type="button"
-                        class="flex-1 rounded-md px-3 py-2 text-xs transition-colors cursor-pointer
-            {device === d
-                           ? 'bg-indigo-600 text-white'
-                           : 'border border-white/10 bg-white/5 text-white/50 hover:text-white'}"
-                        onclick={() => changeDevice(d)}
-                     >
-                        {d.toUpperCase()}
-                     </button>
-                  {/each}
-               </div>
-            </div>
+            <Field
+               label="Device"
+               help="CUDA usa la GPU NVIDIA para acelerar la transcripción. CPU es más lento pero funciona en cualquier máquina."
+            >
+               <SegmentedControl
+                  label="Device"
+                  fill
+                  size="sm"
+                  value={device}
+                  options={caps.devices.map((d) => ({ value: d, label: d.toUpperCase() }))}
+                  onchange={(d) => (cfg.device = d)}
+               />
+            </Field>
 
             <!-- Fila 2: modelo, idioma y compute type -->
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-               <!-- Modelo (ahora a la izquierda) -->
-               <div class="flex min-w-0 flex-col gap-1.5">
-                  <div class="flex items-center gap-1.5">
-                     <label class="text-xs text-white/40" for="transcribe-model">Modelo</label>
-                     <HoverCard
-                        text="Modelos más grandes suelen ser más precisos, pero consumen más memoria y tardan más."
-                     />
-                  </div>
+               <Field
+                  label="Modelo"
+                  for="transcribe-model"
+                  class="min-w-0"
+                  help="Modelos más grandes suelen ser más precisos, pero consumen más memoria y tardan más."
+               >
                   <select
                      id="transcribe-model"
-                     bind:value={modelSize}
-                     disabled={mode === "remote" && modelSizesToShow.length === 0}
+                     value={modelSize}
+                     onchange={(event) => (cfg.modelSize = event.currentTarget.value)}
+                     disabled={target.mode === "remote" && modelOptions.length === 0}
                      class="w-full rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-indigo-500/50 disabled:opacity-40 cursor-pointer"
                   >
-                     {#each modelSizesToShow as size (size)}
+                     {#each modelOptions as size (size)}
                         <option value={size} class="bg-zinc-900 text-white">{size}</option>
                      {/each}
                   </select>
-                  {#if mode === "remote" && modelSizesToShow.length === 0}
+                  {#if target.mode === "remote" && modelOptions.length === 0}
                      <span class="text-xs text-yellow-400">No hay modelos disponibles en este mediador.</span>
                   {/if}
-               </div>
+               </Field>
 
-               <!-- Idioma -->
-               <div class="flex min-w-0 flex-col gap-1.5">
-                  <div class="flex items-center gap-1.5">
-                     <label class="text-xs text-white/40" for="transcribe-language">Idioma</label>
-                     <HoverCard
-                        text="Selecciona el idioma del audio para mejorar la precisión y velocidad de la transcripción."
-                     />
-                  </div>
+               <Field
+                  label="Idioma"
+                  for="transcribe-language"
+                  class="min-w-0"
+                  help="Selecciona el idioma del audio para mejorar la precisión y velocidad de la transcripción."
+               >
                   <select
                      id="transcribe-language"
                      value={language}
                      onchange={(event) => changeLanguage(event.currentTarget.value)}
                      class="w-full rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-indigo-500/50 cursor-pointer"
                   >
-                     {#each LANGUAGES as lang (lang.code)}
+                     {#each caps.languages as lang (lang.code)}
                         <option value={lang.code} class="bg-zinc-900 text-white">{lang.label}</option>
                      {/each}
                   </select>
-               </div>
+               </Field>
 
-               <!-- Compute type -->
-               <div class="flex min-w-0 flex-col gap-1.5">
-                  <div class="flex items-center gap-1.5">
-                     <label class="text-xs text-white/40" for="transcribe-compute-type">Compute type</label>
-                     <HoverCard text="Controla la precisión numérica y el uso de memoria del modelo." />
-                  </div>
+               <Field
+                  label="Compute type"
+                  for="transcribe-compute-type"
+                  class="min-w-0"
+                  help="Controla la precisión numérica y el uso de memoria del modelo."
+               >
                   <select
                      id="transcribe-compute-type"
-                     bind:value={computeType}
+                     value={computeType}
+                     onchange={(event) => (cfg.computeType = event.currentTarget.value)}
                      class="w-full rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-indigo-500/50 cursor-pointer"
                   >
-                     {#each COMPUTE_BY_DEVICE[device] as ct (ct)}
+                     {#each computeOptions as ct (ct)}
                         <option value={ct} class="bg-zinc-900 text-white">{ct}</option>
                      {/each}
                   </select>
-               </div>
+               </Field>
             </div>
 
-            <!-- Fila 2: beam size, formato y subcarpeta -->
+            <!-- Fila 3: beam size, formato y subcarpeta -->
             <div class="grid grid-cols-1 gap-4 border-t border-white/5 pt-4 sm:grid-cols-3">
-               <!-- Beam size (ahora dropdown) -->
-               <div class="flex min-w-0 flex-col gap-1.5">
-                  <div class="flex items-center gap-1.5">
-                     <label class="text-xs text-white/40" for="beam-size">Beam size</label>
-                     <HoverCard
-                        text="Número de hipótesis que el modelo evalúa en paralelo. Un valor más alto puede mejorar el resultado, pero es más lento."
-                     />
-                  </div>
+               <Field
+                  label="Beam size"
+                  for="beam-size"
+                  class="min-w-0"
+                  help="Número de hipótesis que el modelo evalúa en paralelo. Un valor más alto puede mejorar el resultado, pero es más lento."
+               >
                   <select
                      id="beam-size"
-                     bind:value={beamSize}
+                     value={beamSize}
+                     onchange={(event) => (cfg.beamSize = Number(event.currentTarget.value))}
                      class="w-full rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-indigo-500/50 cursor-pointer"
                   >
-                     {#each BEAM_SIZES as n (n)}
+                     {#each caps.beam_sizes as n (n)}
                         <option value={n} class="bg-zinc-900 text-white">{n}</option>
                      {/each}
                   </select>
-               </div>
+               </Field>
 
-               <!-- Formato de salida -->
-               <div class="flex min-w-0 flex-col gap-1.5">
-                  <div class="flex items-center gap-1.5">
-                     <label class="text-xs text-white/40" for="transcribe-output-format">Formato de salida</label>
-                     <HoverCard
-                        text="SRT es el formato estándar para subtítulos. VTT es compatible con HTML5 y TXT exporta solo el texto."
-                     />
-                  </div>
+               <Field
+                  label="Formato de salida"
+                  for="transcribe-output-format"
+                  class="min-w-0"
+                  help="SRT es el formato estándar para subtítulos. VTT es compatible con HTML5 y TXT exporta solo el texto."
+               >
                   <select
                      id="transcribe-output-format"
-                     bind:value={outputFormat}
+                     value={outputFormat}
+                     onchange={(event) => (cfg.outputFormat = event.currentTarget.value)}
                      class="w-full rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-indigo-500/50 cursor-pointer"
                   >
-                     {#each OUTPUT_FORMATS as fmt (fmt)}
+                     {#each caps.output_formats as fmt (fmt)}
                         <option value={fmt} class="bg-zinc-900 text-white">.{fmt}</option>
                      {/each}
                   </select>
-               </div>
+               </Field>
 
-               <!-- Subcarpeta de salida -->
-               <div class="flex min-w-0 flex-col gap-1.5">
-                  <div class="flex items-center gap-1.5">
-                     <label class="text-xs text-white/40" for="subfolder">Subcarpeta de salida</label>
-                     <HoverCard
-                        text="Los archivos se guardan en ./transcriptions/[subcarpeta]. Al cambiar el idioma, esta se actualiza al nombre correspondiente; también puedes editarla manualmente."
-                     />
-                  </div>
+               <Field
+                  label="Subcarpeta de salida"
+                  for="subfolder"
+                  class="min-w-0"
+                  help="Los archivos se guardan en ./transcriptions/[subcarpeta]. Al cambiar el idioma, esta se actualiza al nombre correspondiente; también puedes editarla manualmente."
+               >
                   <input
                      id="subfolder"
                      type="text"
-                     bind:value={outputSubfolder}
-                     placeholder={LANGUAGE_FOLDERS[language]}
+                     value={subfolderInput}
+                     oninput={(event) => (cfg.outputSubfolder = event.currentTarget.value)}
+                     placeholder={languageLabel}
                      class="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder-white/20 outline-none transition-colors focus:border-indigo-500/50"
                   />
                   {#if appConfig.baseFolder}
-                     <span class="truncate text-xs text-white/20">→ transcriptions/{outputSubfolder}/</span>
+                     <span class="truncate text-xs text-white/20">→ {outputHint}</span>
                   {/if}
-               </div>
+               </Field>
             </div>
 
             <!-- Opciones adicionales (estilo link sutil) -->
@@ -586,6 +374,18 @@
             >
                Opciones adicionales
             </button>
+
+            <!-- Estado del plan -->
+            {#if overwrites.length}
+               <span class="text-xs text-yellow-400 break-words">
+                  Ya existen y se sobrescribirán: {overwrites.slice(0, 3).join(", ")}{overwrites.length > 3
+                     ? ` y ${overwrites.length - 3} más`
+                     : ""}
+               </span>
+            {/if}
+            {#if planError}
+               <span role="alert" class="text-xs text-red-400 break-words">{planError}</span>
+            {/if}
 
             <!-- Ejecutar -->
             <button
@@ -625,19 +425,22 @@
          </header>
 
          <SwitchField
-            bind:checked={vadFilter}
+            checked={vadFilter}
+            onchange={(value) => (cfg.vadFilter = value)}
             label="VAD filter"
             help="Detecta y omite los silencios del audio antes de transcribir. Puede ayudar especialmente en audios con pausas largas."
          />
 
          <SwitchField
-            bind:checked={conditionOnPrev}
+            checked={conditionOnPrev}
+            onchange={(value) => (cfg.conditionOnPrev = value)}
             label="Condition on previous text"
             help="Usa el texto transcrito anteriormente como contexto para el siguiente segmento. Puede mejorar la coherencia, pero también causar alucinaciones en audios largos."
          />
 
          <SwitchField
-            bind:checked={wordTimestamps}
+            checked={wordTimestamps}
+            onchange={(value) => (cfg.wordTimestamps = value)}
             label="Word timestamps"
             help="Calcula timestamps más precisos a nivel de palabra."
          />
@@ -649,7 +452,8 @@
          >
             <textarea
                id="transcribe-initial-prompt"
-               bind:value={initialPrompt}
+               value={initialPrompt}
+               oninput={(event) => (cfg.initialPrompt = event.currentTarget.value)}
                rows="4"
                placeholder="Sin prompt..."
                class="resize-y rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white placeholder-white/20 outline-none transition-colors focus:border-indigo-500/50"

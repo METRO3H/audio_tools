@@ -9,6 +9,7 @@
  *   audiotools:log       { message: string }
  *   audiotools:file      { index: int, done: bool, started_at?: float, elapsed?: float }
  *   audiotools:done      { success: bool, cancelled?: bool, elapsed?: float, error?: string, warning?: string }
+ *   audiotools:transcribe:file_log  { job_id, file_index: int, message: string }  (los mensajes de cada archivo)
  *
  * Las tools migradas al contrato agregan `job_id` a cada evento. Si el evento
  * trae job_id y no coincide con `progress.jobId` (p. ej. el `done` rezagado de
@@ -27,6 +28,7 @@
  *   progress.warning    // string | null (el job terminó bien, pero con algo que el usuario debe saber)
  *   progress.jobId      // string | null (lo asigna useToolRun)
  *   progress.files      // { index: int, done: bool }[]
+ *   progress.fileLogs   { [file_index]: string[] }  (logs por archivo; los lee ProcessingView con enableFileLogs)
  *   progress.reset()    // limpia para una nueva operación
  */
 
@@ -38,6 +40,7 @@ export const progress = $state({
    logs: [],
    success: null,
    files: [],
+   fileLogs: {},
    fileIndex: 0,
    fileProgress: 0,
    completed: 0,
@@ -55,6 +58,7 @@ export const progress = $state({
       this.logs = [];
       this.success = null;
       this.files = [];
+      this.fileLogs = {};
       this.fileIndex = 0;
       this.fileProgress = 0;
       this.completed = 0;
@@ -100,6 +104,16 @@ if (typeof window !== "undefined") {
    window.addEventListener("audiotools:log", (/** @type {CustomEvent} */ e) => {
       if (isStale(e.detail)) return;
       progress.logs = [...progress.logs, e.detail.message];
+   });
+
+   window.addEventListener("audiotools:transcribe:file_log", (/** @type {CustomEvent} */ e) => {
+      if (isStale(e.detail)) return;
+      const { file_index, message } = e.detail;
+      if (!Number.isInteger(file_index) || file_index < 0) return;
+      progress.fileLogs = {
+         ...progress.fileLogs,
+         [file_index]: [...(progress.fileLogs[file_index] ?? []), String(message ?? "")],
+      };
    });
 
    window.addEventListener("audiotools:file", (/** @type {CustomEvent} */ e) => {

@@ -98,4 +98,38 @@ describe("FileList: acciones", () => {
       });
       expect(screen.getAllByText("x.mp3").length).toBe(2);
    });
+
+   it("loading muestra «Cargando archivos...» en lugar de la lista y del texto vacío", () => {
+      render(FileList, { props: { fileInfos: FILES, loading: true } });
+      expect(screen.getByText("Cargando archivos...")).toBeTruthy();
+      expect(screen.queryByText("a.mp3")).toBeNull();
+   });
+
+   it("sin loading (por defecto) no hay spinner", () => {
+      render(FileList, { props: { fileInfos: FILES } });
+      expect(screen.queryByText("Cargando archivos...")).toBeNull();
+   });
+
+   it("height=\"fixed\" reserva una caja de altura fija con la lista, el texto vacío y la carga dentro", () => {
+      const { container, unmount } = render(FileList, { props: { fileInfos: FILES, height: "fixed" } });
+      const box = container.querySelector(".h-44");
+      expect(box).toBeTruthy();
+      expect(box.textContent).toContain("a.mp3");
+      expect(box.querySelector("ul").className).not.toContain("max-h-40");
+      unmount();
+
+      const empty = render(FileList, { props: { fileInfos: [], height: "fixed", emptyText: "Nada aún" } });
+      expect(empty.container.querySelector(".h-44").textContent).toContain("Nada aún");
+      empty.unmount();
+
+      const loading = render(FileList, { props: { fileInfos: [], height: "fixed", loading: true } });
+      expect(loading.container.querySelector(".h-44").textContent).toContain("Cargando archivos...");
+   });
+
+   it("el tamaño por defecto (auto) no cambia: lista con máximo de altura y sin caja fija", () => {
+      const { container } = render(FileList, { props: { fileInfos: FILES } });
+      expect(container.querySelector(".h-44")).toBeNull();
+      expect(container.querySelector("ul").className).toContain("max-h-40");
+   });
 });
+

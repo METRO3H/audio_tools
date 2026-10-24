@@ -5,30 +5,10 @@ import gc
 
 from faster_whisper import WhisperModel
 
-COMPUTE_TYPES_BY_DEVICE: dict[str, list[str]] = {
-    "cuda": ["float16", "int8_float16", "int8"],
-    "cpu":  ["float32", "int8"],
-}
+from core.jobs import describe_error
 
-DEVICES     = ["cuda", "cpu"]
-MODEL_SIZES = ["tiny", "base", "small", "medium", "large-v1", "large-v2", "large-v3"]
-LANGUAGES   = {
-    "auto": None,
-    "ja":   "ja",
-    "zh":   "zh",
-    "ko":   "ko",
-    "es":   "es",
-    "en":   "en",
-}
-
-DEFAULT_MODEL_SIZE            = "large-v1"
-DEFAULT_DEVICE                = "cuda"
-DEFAULT_COMPUTE_TYPE          = "int8_float16"
-DEFAULT_LANGUAGE              = "ja"
-DEFAULT_VAD_FILTER            = True
-DEFAULT_CONDITION_ON_PREV     = False
-DEFAULT_WORD_TIMESTAMPS       = True
-DEFAULT_BEAM_SIZE             = 5
+# Qué modelos, dispositivos e idiomas se ofrecen y con qué valores por defecto vive en
+# core/transcription/options.py (sin importar faster_whisper).
 
 
 class WhisperRunner:
@@ -50,11 +30,15 @@ class WhisperRunner:
         self,
         configs: list,
         on_log: Callable[[str], None],
-        on_done: Callable[[bool, list], None],
+        on_done: Callable[[bool, list, str | None], None],
         on_progress: Callable[[float], None] | None = None,
         on_file_start: Callable[[int], None] | None = None,
         on_file_done: Callable[[int, list], None] | None = None,
     ) -> None:
+        """
+        `on_done(success, all_segments, error=None)`: `error` es el mensaje legible cuando el
+        trabajo falla (None si terminó bien o se canceló).
+        """
         self._cancelled = False
         thread = threading.Thread(
             target=self._sequential_worker,
@@ -93,7 +77,8 @@ class WhisperRunner:
     ) -> list | None:
         on_log(f"Transcribiendo {config.input_file.name}...")
 
-        language = LANGUAGES.get(config.language)  # None = auto-detect
+        # Un código de idioma (ja, zh...); vacío o "auto" = que Whisper lo detecte.
+        language = None if config.language in ("", "auto") else config.language
 
         segments_gen, info = model.transcribe(
             str(config.input_file),
@@ -160,7 +145,7 @@ class WhisperRunner:
 
         except Exception as e:
             on_log(f"[error] {e}")
-            on_done(False, [])
+            on_done(False, [], describe_error(e))
 
     def unload(self) -> None:
         with self._lock:

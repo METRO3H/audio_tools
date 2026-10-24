@@ -56,6 +56,8 @@ import config
 from core.actions.merge_audio import MergeAudioAction, resolve_merge
 from core.actions.diverge_audio import DivergeAudioAction, resolve_diverge
 from core.actions.audio_to_video import AudioToVideoAction, resolve_audio_to_video
+from core.transcription import options as whisper_options
+from core.transcription.job import resolve_transcribe, run_transcription
 from core.transcription.transcribe_action import TranscribeAction
 from core.transcription.whisper_runner import WhisperRunner
 from core.ffmpeg_runner import FFmpegRunner
@@ -74,7 +76,7 @@ from core.models import (
     MergeOptions,
     DivergeOptions,
     AudioToVideoOptions,
-    TranscribeConfig,
+    TranscribeOptions,
 )
 from pathlib import Path
 from core.translation.runner import TranslateRunner
@@ -182,13 +184,13 @@ class AudioToolsAPI:
         """Devuelve la configuración base al frontend."""
         return {
             "default_base_folder": str(config.DEFAULT_BASE_FOLDER),
-            "transcribe_initial_prompt": config.TRANSCRIBE_INITIAL_PROMPT,
             "media_extensions": {
                 "audio": sorted(_AUDIO_EXTS),
                 "video": sorted(_VIDEO_EXTS),
             },
             "output_formats": formats.as_config(),
             "video_encoding": video_encoding.as_config(),
+            "transcription": whisper_options.as_config(config.TRANSCRIBE_INITIAL_PROMPT),
         }
 
     def get_duration(self, file_path: str) -> float:
@@ -480,132 +482,81 @@ class AudioToolsAPI:
             "models": models,
         }
 
-    def run_transcribe(
-        self,
-        file_paths:               list[str],
-        base_folder:              str,
-        model_size:               str,
-        device:                   str,
-        compute_type:             str,
-        output_subfolder:         str,
-        beam_size:                int = 5,
-        language:                 str = "ja",
-        vad_filter:               bool = True,
-        condition_on_previous_text: bool = False,
-        word_timestamps:          bool = True,
-        initial_prompt:           str = "",
-        output_format:            str = "srt",
-        remote_host:              str | None = None,
-        remote_port:              int | None = None,
-    ) -> None:
+    def plan_transcribe(self, options: dict) -> dict:
         """
-        Si remote_host/remote_port vienen dados, transcribe contra el
-        mediador en vez de cargar faster-whisper en este proceso — todo
-        lo demás (armado de configs, escritura de archivos de salida,
-        eventos al frontend) es idéntico en ambos casos.
+        Qué va a producir Transcribe, sin ejecutarlo: carpeta de salida y, por cada audio, su
+        duración y la transcripción que se escribirá (y si ya existe y se sobrescribirá).
+        Es la misma planificación que usa run_transcribe.
+
+        Opciones (claves snake_case; ver core/models.py::TranscribeOptions): las mismas que
+        run_transcribe, sin job_id. Conviene enviar `durations` (ya conocidas por el frontend)
+        para no lanzar ffprobe en cada consulta.
+
+        Nunca lanza: devuelve {"error": "mensaje"} si algo falla (opciones inválidas, carpeta
+        base inexistente, subcarpeta con ruta, dos audios con el mismo nombre...); si todo va bien,
+            {
+              "output_dir": str,
+              "files": [{index, name, path, duration, output, output_name, exists}, ...],
+              "total_duration": float
+            }
+        No crea carpetas ni escribe nada.
         """
-        from core.transcription.transcribe_action import TranscribeAction
-        from core.models import TranscribeConfig
+        try:
+            opts = TranscribeOptions.from_dict(options)
+            configs = resolve_transcribe(opts, lambda path: get_duration(config.FFPROBE_BIN, path))
+            return TranscribeAction().plan(configs).to_dict()
+        except Exception as exc:  # noqa: BLE001 - el frontend solo necesita el mensaje
+            return {"error": describe_error(exc)}
 
-        is_remote = remote_host is not None and remote_port is not None
+    def run_transcribe(self, options: dict) -> None:
+        """
+        Transcribe cada audio y escribe <base_folder>/transcriptions/<subcarpeta>/<nombre>.<formato>.
+        Retorna de inmediato: el avance llega por los eventos audiotools:start/log/progress/done
+        (todos con job_id) y, además, audiotools:transcribe:file_log (los mensajes de cada archivo).
+        Cualquier error llega como audiotools:done con success=false y error, nunca como excepción.
 
-        if is_remote:
-            from core.transcription.remote_whisper_runner import RemoteWhisperRunner
-            runner = RemoteWhisperRunner(remote_host, remote_port)
-            self._active_remote_runner = runner
-        else:
-            # Solo tiene sentido liberar VRAM local de traducción cuando
-            # el modelo de whisper también va a cargarse en esta misma
-            # máquina — un mediador remoto no compite por esa memoria.
-            self._unload_all_translation_models()
-            runner = self._whisper
-
-        action = TranscribeAction()
-        configs = [
-            TranscribeConfig(
-                input_file=Path(p),
-                base_folder=Path(base_folder),
-                total_duration=get_duration(config.FFPROBE_BIN, Path(p)),
-                model_size=model_size,
-                device=device,
-                compute_type=compute_type,
-                output_subfolder=output_subfolder,
-                beam_size=beam_size,
-                language=language,
-                vad_filter=vad_filter,
-                condition_on_previous_text=condition_on_previous_text,
-                word_timestamps=word_timestamps,
-                initial_prompt=initial_prompt,
-                output_format=output_format,
-            )
-            for p in file_paths
-        ]
-
-        on_log, on_progress, on_file_start, _ = _make_sequential_callbacks(
-            self._window, len(configs)
+        Opciones (claves snake_case): las mismas que plan_transcribe, más job_id (generado por el
+        frontend). `target` decide dónde se ejecuta: {"mode": "local"} (faster-whisper en esta PC)
+        o {"mode": "remote", "host", "port"} (el mediador de la red); todo lo demás es idéntico.
+        Ver core/models.py::TranscribeOptions.
+        """
+        events = JobEvents(
+            lambda event, detail: _emit(self._window, event, detail),
+            tool="transcribe",
+            job_id=job_id_from(options),
         )
+        with job_errors(events):
+            opts = TranscribeOptions.from_dict(options)
+            configs = resolve_transcribe(opts, lambda path: get_duration(config.FFPROBE_BIN, path))
+            plan = TranscribeAction().plan(configs)
 
-        base_on_log = on_log
-        base_on_file_start = on_file_start
-        current_file_index = {"value": None}
+            if opts.target is not None:
+                from core.transcription.remote_whisper_runner import RemoteWhisperRunner
 
-        def on_log(message: str):
-            # Conserva los logs globales y, además, los asocia al archivo
-            # que se está procesando para mostrarlos en su modal en vivo.
-            base_on_log(message)
+                runner = RemoteWhisperRunner(opts.target.host, opts.target.port)
+                self._active_remote_runner = runner
+            else:
+                # Solo tiene sentido liberar VRAM local de traducción cuando el modelo de whisper
+                # también va a cargarse en esta misma máquina: un mediador remoto no compite por ella.
+                self._unload_all_translation_models()
+                runner = self._whisper
 
-            file_index = current_file_index["value"]
-            if file_index is None:
-                # Durante la preparación/subida aún puede no haber llegado
-                # el evento file_start. Si el mensaje menciona un archivo,
-                # lo asociamos a ese archivo; si no, al primero del lote.
-                file_index = next(
-                    (
-                        i for i, cfg in enumerate(configs)
-                        if cfg.input_file.name in message
-                    ),
-                    0,
-                )
+            def release_remote() -> None:
+                if opts.target is not None:
+                    self._active_remote_runner = None
 
-            _emit(self._window, "audiotools:transcribe:file_log", {
-                "file_index": file_index,
-                "message": message,
-            })
+            def emit_file_log(file_index: int, message: str) -> None:
+                _emit(self._window, "audiotools:transcribe:file_log", {
+                    "job_id": events.job_id,
+                    "file_index": file_index,
+                    "message": message,
+                })
 
-        def on_file_start(index: int):
-            current_file_index["value"] = index
-            base_on_file_start(index)
-
-        def on_file_done(i: int, segments: list):
-            out_path = action.get_output_path(
-                configs[i].input_file,
-                configs[i].base_folder,
-                configs[i].output_subfolder,
-                configs[i].output_format,
-            )
-            action.write_output(segments, out_path, configs[i].output_format)
-            _emit(self._window, "audiotools:progress", {
-                "value":         (i + 1) / len(configs),
-                "file_index":    i,
-                "file_progress": 1,
-                "completed":     i + 1,
-                "total":         len(configs),
-            })
-
-        def on_done(success: bool, all_segments: list):
-            detail = {"success": success, "cancelled": job_cancelled(runner, success)}
-            _emit(self._window, "audiotools:done", detail)
-            if is_remote:
-                self._active_remote_runner = None
-
-        runner.run_sequential(
-            configs=configs,
-            on_log=on_log,
-            on_done=on_done,
-            on_progress=on_progress,
-            on_file_start=on_file_start,
-            on_file_done=on_file_done,
-        )
+            try:
+                run_transcription(runner, configs, plan, events, emit_file_log, on_finished=release_remote)
+            except BaseException:
+                release_remote()  # el runner no llegó a arrancar: no queda nada que cancelar
+                raise
 
     # — Diálogos nativos ———————————————————————————————————————————————————
 

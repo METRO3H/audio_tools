@@ -51,11 +51,17 @@ def test_build_txt():
     assert build_txt(SEGMENTS) == "Hello\nWorld"
 
 
-def test_output_path_creates_folder_and_uses_stem(tmp_path):
+def test_output_path_uses_the_stem_and_does_not_touch_the_disk(tmp_path):
     action = TranscribeAction()
     out = action.get_output_path(tmp_path / "audios" / "ep1.mp3", tmp_path, "japanese", "vtt")
     assert out == tmp_path / "transcriptions" / "japanese" / "ep1.vtt"
-    assert out.parent.is_dir()
+    assert not (tmp_path / "transcriptions").exists()  # antes creaba la carpeta como efecto lateral
+
+
+def test_write_output_creates_the_folder(tmp_path):
+    out = tmp_path / "transcriptions" / "japanese" / "ep1.srt"
+    TranscribeAction().write_output(SEGMENTS, out, "srt")
+    assert out.read_text(encoding="utf-8").startswith("1\n00:00:00,000")
 
 
 @pytest.mark.parametrize("fmt, expected_start", [("srt", "1\n00:00:00,000"), ("vtt", "WEBVTT"), ("txt", "Hello")])

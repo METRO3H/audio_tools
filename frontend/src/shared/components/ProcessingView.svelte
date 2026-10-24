@@ -18,7 +18,6 @@
       onBack,
       showOpenFile = true,
       enableFileLogs = false,
-      fileLogsByIndex = {},
    } = $props();
 
    // ── Logs modals ────────────────────────────────────────────────────────────
@@ -120,7 +119,7 @@
 {#if enableFileLogs && selectedFileIndex !== null}
    <TranscribeFileLogsModal
       name={fileInfos[selectedFileIndex]?.name ?? `Archivo ${selectedFileIndex + 1}`}
-      logs={fileLogsByIndex[selectedFileIndex] ?? []}
+      logs={progress.fileLogs[selectedFileIndex] ?? []}
       status={fileStatus(selectedFileIndex)}
       onClose={() => (selectedFileIndex = null)}
    />

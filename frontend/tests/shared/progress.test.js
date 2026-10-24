@@ -130,3 +130,38 @@ describe("progress.reset()", () => {
       expect(progress.running).toBe(false);
    });
 });
+
+describe("progress store: logs por archivo", () => {
+   const fileLog = (detail) => window.dispatchEvent(new CustomEvent("audiotools:transcribe:file_log", { detail }));
+
+   beforeEach(() => {
+      progress.reset();
+      progress.jobId = "J1";
+   });
+
+   it("acumula los mensajes de cada archivo por su índice", () => {
+      fileLog({ job_id: "J1", file_index: 0, message: "a" });
+      fileLog({ job_id: "J1", file_index: 1, message: "b" });
+      fileLog({ job_id: "J1", file_index: 0, message: "c" });
+      expect(progress.fileLogs).toEqual({ 0: ["a", "c"], 1: ["b"] });
+   });
+
+   it("descarta los de otro job (un job cancelado que sigue hablando)", () => {
+      fileLog({ job_id: "OTRO", file_index: 0, message: "viejo" });
+      expect(progress.fileLogs).toEqual({});
+   });
+
+   it("ignora un índice inválido", () => {
+      fileLog({ job_id: "J1", file_index: -1, message: "x" });
+      fileLog({ job_id: "J1", file_index: "0", message: "x" });
+      fileLog({ job_id: "J1", message: "x" });
+      expect(progress.fileLogs).toEqual({});
+   });
+
+   it("reset() los limpia", () => {
+      fileLog({ job_id: "J1", file_index: 0, message: "a" });
+      progress.reset();
+      expect(progress.fileLogs).toEqual({});
+   });
+});
+

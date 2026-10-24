@@ -1,4 +1,3 @@
-
 """
 Runner que habla con el mediador remoto en vez de cargar faster-whisper
 en este mismo proceso.
@@ -17,6 +16,7 @@ from __future__ import annotations
 import threading
 from typing import Callable
 
+from core.jobs import describe_error
 from core.network.mediator_client import (
     MediatorBusyError,
     MediatorClient,
@@ -60,11 +60,15 @@ class RemoteWhisperRunner:
         self,
         configs: list,
         on_log: Callable[[str], None],
-        on_done: Callable[[bool, list], None],
+        on_done: Callable[[bool, list, str | None], None],
         on_progress: Callable[[float], None] | None = None,
         on_file_start: Callable[[int], None] | None = None,
         on_file_done: Callable[[int, list], None] | None = None,
     ) -> None:
+        """
+        `on_done(success, all_segments, error=None)`: `error` es el mensaje legible cuando el
+        trabajo falla (None si terminó bien o se canceló).
+        """
         self._cancelled = False
         self.was_cancelled = False
         thread = threading.Thread(
@@ -123,11 +127,11 @@ class RemoteWhisperRunner:
                 job = self._client.create_job(job_config, files_expected=len(configs))
             except MediatorBusyError as exc:
                 on_log(f"[error] El mediador está ocupado: {exc}")
-                on_done(False, [])
+                on_done(False, [], f"El mediador está ocupado: {exc}")
                 return
             except MediatorRejectedError as exc:
                 on_log(f"[error] El mediador rechazó la solicitud: {exc}")
-                on_done(False, [])
+                on_done(False, [], f"El mediador rechazó la solicitud: {exc}")
                 return
 
             if self._cancelled:
@@ -151,9 +155,10 @@ class RemoteWhisperRunner:
                 )
 
             success = True
+            last_error: str | None = None  # el último error que mandó el mediador
 
             def handle_message(message: dict) -> None:
-                nonlocal success
+                nonlocal success, last_error
                 msg_type = message.get("type")
 
                 if msg_type == "log":
@@ -174,6 +179,7 @@ class RemoteWhisperRunner:
                         on_file_done(message["file_index"], segments)
                 elif msg_type == "error":
                     on_log(f"[error] {message['message']}")
+                    last_error = str(message["message"])
                     success = False
                 elif msg_type == "done":
                     if not message.get("success", False):
@@ -183,12 +189,17 @@ class RemoteWhisperRunner:
                 # "file_received" no tiene equivalente local — se ignora.
 
             self._client.listen(job["ws_path"], handle_message)
-            on_done(success and not self._cancelled, all_segments)
+            ok = success and not self._cancelled
+            cancelled = self._cancelled or self.was_cancelled
+            error = None if (ok or cancelled) else (last_error or "El mediador terminó sin completar la transcripción.")
+            on_done(ok, all_segments, error)
 
-        except MediatorError as exc:
+        except Exception as exc:  # MediatorError y cualquier otro: mismo criterio amplio que WhisperRunner
+            if self._cancelled:
+                # Cancelar corta la conexión: lo que salte después no es un fallo, es la cancelación.
+                self.was_cancelled = True
+                on_done(False, all_segments, None)
+                return
             on_log(f"[error] {exc}")
-            on_done(False, all_segments)
-        except Exception as exc:  # mismo criterio amplio que usa WhisperRunner local
-            on_log(f"[error] {exc}")
-            on_done(False, all_segments)
-
+            # Un MediatorError ya trae un mensaje redactado; el resto, con el tipo de la excepción.
+            on_done(False, all_segments, str(exc) if isinstance(exc, MediatorError) else describe_error(exc))

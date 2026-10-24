@@ -11,6 +11,7 @@ vi.mock("@shared/services/bridge.svelte.js", () => ({ bridge }));
 import TranscribeView from "@transcribe/TranscribeView.svelte";
 import { appConfig } from "@shared/state/config.svelte.js";
 import { progress } from "@shared/state/progress.svelte.js";
+import { TRANSCRIBE_CAPS } from "./transcribeCaps.js";
 
 const flush = async () => {
    await tick();
@@ -23,7 +24,7 @@ beforeEach(async () => {
    progress.reset();
    vi.resetAllMocks();
    appConfig.baseFolder = "C:/Proj";
-   appConfig.transcribeInitialPrompt = "";
+   appConfig.transcription = { ...TRANSCRIBE_CAPS, defaults: { ...TRANSCRIBE_CAPS.defaults, initial_prompt: "" } };
    render(TranscribeView, { props: { goHome: vi.fn() } });
    await fireEvent.click(screen.getByRole("button", { name: /Transcribir en esta PC/ }));
    await flush();

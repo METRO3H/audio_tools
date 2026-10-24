@@ -6,6 +6,8 @@ from core.filenames import sanitize_name
 from core.formats import output_formats
 from core.jobs import job_id_from
 from core import video_encoding
+from core.network.remote_target import RemoteTarget, parse_target
+from core.transcription import options as whisper_options
 
 
 def _is_number(value) -> bool:
@@ -417,3 +419,178 @@ class TranscribeConfig:
     word_timestamps:          bool  = True
     initial_prompt:           str   = ""
     output_format:            str   = "srt"
+
+
+def _choice(raw: dict, key: str, allowed, default):
+    value = raw.get(key, default)
+    if value not in allowed:
+        raise ValueError(f"La opción «{key}» debe ser una de: " + ", ".join(map(str, allowed)) + ".")
+    return value
+
+
+def _flag(raw: dict, key: str, default: bool) -> bool:
+    value = raw.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"La opción «{key}» debe ser verdadero o falso.")
+    return value
+
+
+@dataclass
+class TranscribeOptions:
+    """
+    Opciones de api.run_transcribe / api.plan_transcribe tal como llegan del frontend
+    (claves snake_case). `from_dict` valida claves y valores contra
+    core/transcription/options.py y levanta ValueError con un mensaje legible;
+    `to_configs` produce la configuración por archivo que usan los runners.
+
+    file_paths                  audios a transcribir (mínimo 1)
+    base_folder                 carpeta base: las salidas van a <base>/transcriptions/<subcarpeta>
+    model_size                  uno de MODEL_SIZES; con target remoto, el nombre de un modelo del
+                                mediador (que es quien conoce su lista)
+    device / compute_type       uno de DEVICES y uno de COMPUTE_TYPES[device]
+    beam_size                   uno de BEAM_SIZES
+    language                    uno de LANGUAGES (código: ja, zh)
+    vad_filter, condition_on_previous_text, word_timestamps   interruptores de faster-whisper
+    initial_prompt              texto que guía la transcripción ("" = ninguno)
+    output_format               uno de OUTPUT_FORMATS
+    output_subfolder            UN nombre de carpeta; vacío o ausente = la del idioma. Tras `from_dict`
+                                es siempre texto ya resuelto y saneado (ver resolve_subfolder)
+    target                      {"mode": "local"} | {"mode": "remote", "host", "port"} (ver
+                                core/network/remote_target.py); tras `from_dict` es None (local) o un
+                                RemoteTarget
+    durations                   duración conocida de cada audio (None/0 = desconocida: se lee con ffprobe)
+    job_id                      lo genera el frontend (ver core/jobs.py)
+    """
+
+    file_paths: list[str]
+    base_folder: str
+    model_size: str = whisper_options.DEFAULTS["model_size"]
+    device: str = whisper_options.DEFAULTS["device"]
+    compute_type: str = whisper_options.DEFAULTS["compute_type"]
+    beam_size: int = whisper_options.DEFAULTS["beam_size"]
+    language: str = whisper_options.DEFAULTS["language"]
+    vad_filter: bool = whisper_options.DEFAULTS["vad_filter"]
+    condition_on_previous_text: bool = whisper_options.DEFAULTS["condition_on_previous_text"]
+    word_timestamps: bool = whisper_options.DEFAULTS["word_timestamps"]
+    initial_prompt: str = ""
+    output_format: str = whisper_options.DEFAULTS["output_format"]
+    output_subfolder: str | None = None
+    target: RemoteTarget | None = None
+    durations: list[float | None] | None = None
+    job_id: str | None = None
+
+    _REQUIRED = ("file_paths", "base_folder")
+
+    @classmethod
+    def from_dict(cls, raw) -> "TranscribeOptions":
+        if not isinstance(raw, dict):
+            raise ValueError("Las opciones deben ser un objeto.")
+
+        known = {f.name for f in fields(cls)}
+        unknown = sorted(set(raw) - known)
+        if unknown:
+            raise ValueError("Opciones desconocidas: " + ", ".join(unknown))
+        missing = [k for k in cls._REQUIRED if k not in raw]
+        if missing:
+            raise ValueError("Faltan opciones: " + ", ".join(missing))
+
+        paths = raw["file_paths"]
+        if not isinstance(paths, list) or not all(isinstance(p, str) and p.strip() for p in paths):
+            raise ValueError("La opción «file_paths» debe ser una lista de rutas.")
+        if not paths:
+            raise ValueError("Selecciona al menos un audio.")
+
+        target = parse_target(raw.get("target"))
+
+        # Con un mediador remoto, la lista de modelos es la suya (externa a este proyecto): solo se
+        # exige un nombre. En local, uno de los conocidos.
+        model_size = raw.get("model_size", whisper_options.DEFAULTS["model_size"])
+        if target is None:
+            model_size = _choice(raw, "model_size", whisper_options.MODEL_SIZES, model_size)
+        elif not isinstance(model_size, str) or not model_size.strip():
+            raise ValueError("La opción «model_size» debe ser el nombre de un modelo.")
+
+        device = _choice(raw, "device", whisper_options.DEVICES, whisper_options.DEFAULTS["device"])
+        compute_type = raw.get("compute_type", whisper_options.DEFAULTS["compute_type"])
+        if compute_type not in whisper_options.COMPUTE_TYPES[device]:
+            raise ValueError(
+                f"La opción «compute_type» debe ser una de: "
+                + ", ".join(whisper_options.COMPUTE_TYPES[device])
+                + f" (para el dispositivo «{device}»)."
+            )
+
+        beam_size = raw.get("beam_size", whisper_options.DEFAULTS["beam_size"])
+        if not _is_number(beam_size) or not float(beam_size).is_integer() or int(beam_size) not in whisper_options.BEAM_SIZES:
+            raise ValueError(
+                "La opción «beam_size» debe ser uno de: " + ", ".join(map(str, whisper_options.BEAM_SIZES)) + "."
+            )
+
+        language = _choice(raw, "language", whisper_options.LANGUAGES, whisper_options.DEFAULTS["language"])
+        output_format = _choice(
+            raw, "output_format", whisper_options.OUTPUT_FORMATS, whisper_options.DEFAULTS["output_format"]
+        )
+
+        initial_prompt = raw.get("initial_prompt", "")
+        if not isinstance(initial_prompt, str):
+            raise ValueError("La opción «initial_prompt» debe ser un texto.")
+
+        subfolder = raw.get("output_subfolder")
+        if subfolder is not None and not isinstance(subfolder, str):
+            raise ValueError("La opción «output_subfolder» debe ser un texto.")
+
+        durations = raw.get("durations")
+        if durations is not None:
+            if (
+                not isinstance(durations, list)
+                or len(durations) != len(paths)
+                or not all(d is None or (_is_number(d) and d >= 0) for d in durations)
+            ):
+                raise ValueError(
+                    "La opción «durations» debe ser una lista con un número (o null) por cada archivo."
+                )
+
+        if raw.get("job_id") is not None and job_id_from(raw) is None:
+            raise ValueError("La opción «job_id» no es válida.")
+
+        return cls(
+            file_paths=list(paths),
+            base_folder=_require_text(raw, "base_folder"),
+            model_size=model_size.strip(),
+            device=device,
+            compute_type=compute_type,
+            beam_size=int(beam_size),
+            language=language,
+            vad_filter=_flag(raw, "vad_filter", whisper_options.DEFAULTS["vad_filter"]),
+            condition_on_previous_text=_flag(
+                raw, "condition_on_previous_text", whisper_options.DEFAULTS["condition_on_previous_text"]
+            ),
+            word_timestamps=_flag(raw, "word_timestamps", whisper_options.DEFAULTS["word_timestamps"]),
+            initial_prompt=initial_prompt,
+            output_format=output_format,
+            output_subfolder=whisper_options.resolve_subfolder(subfolder, language),
+            target=target,
+            durations=durations,
+            job_id=job_id_from(raw),
+        )
+
+    def to_configs(self, durations: list[float]) -> list["TranscribeConfig"]:
+        """Una configuración por archivo; `durations` (una por archivo) alimenta el progreso."""
+        return [
+            TranscribeConfig(
+                input_file=Path(path),
+                base_folder=Path(self.base_folder),
+                total_duration=duration,
+                model_size=self.model_size,
+                device=self.device,
+                compute_type=self.compute_type,
+                output_subfolder=self.output_subfolder,
+                beam_size=self.beam_size,
+                language=self.language,
+                vad_filter=self.vad_filter,
+                condition_on_previous_text=self.condition_on_previous_text,
+                word_timestamps=self.word_timestamps,
+                initial_prompt=self.initial_prompt,
+                output_format=self.output_format,
+            )
+            for path, duration in zip(self.file_paths, durations)
+        ]
