@@ -11,18 +11,21 @@ Convención de eventos JS:
     audiotools:start             { detail: { job_id: str, tool: str, total: int } }
     audiotools:log               { detail: { message: str } }
     audiotools:progress          { detail: { value: float } }
-    audiotools:file              { detail: { index: int, done: bool, started_at?: float, elapsed?: float } }
+    audiotools:file              { detail: { index: int, done: bool, started_at?: float, elapsed?: float, job_id?: str } }
     audiotools:done              { detail: { success: bool, elapsed?: float, cancelled?: bool, error?: str } }
     audiotools:translate:stats   { detail: { run_id: int|null, ...RunStats } } — una vez, al terminar
     audiotools:translate:block_stream  { detail: { file_index: int, text: str } }
     audiotools:translate:block_input   { detail: { file_index: int, text: str } }
     audiotools:translate:system_prompt { detail: { text: str, sections: {base_prompt, glossary, work_info, title} } }
 
-Las tools migradas al contrato de core/jobs.py (hoy: diverge) reciben un
-objeto de opciones con job_id, emiten audiotools:start y agregan job_id a
-log/progress/done. Cualquier fallo lo reportan como done{success:false, error}
-y no como excepción. Las demás tools siguen con el protocolo anterior (sin
-job_id) hasta que se migren.
+Las tools migradas al contrato de core/jobs.py (hoy: merge, diverge,
+audio_to_video, transcribe, translate —.srt—) reciben un objeto de opciones
+con job_id y target ({"mode": "local"} | {"mode": "remote", host, port}),
+emiten audiotools:start y agregan job_id a log/progress/done. Cualquier
+fallo lo reportan como done{success:false, error} y no como excepción. Las
+demás tools (translate chapters/filenames) siguen con el protocolo
+anterior — remote_host/remote_port como parámetros sueltos, sin job_id —
+hasta que se migren.
 
 Los campos started_at/elapsed en audiotools:file y elapsed en audiotools:done
 son opcionales — hoy solo los manda run_translate() (.srt). started_at es un
@@ -31,10 +34,10 @@ que el frontend arme un contador en vivo sin pedirle nada mas al backend;
 elapsed es el tiempo final medido por el propio backend (mas preciso que
 calcularlo en JS).
 
-Las tres tools de traduccion (.srt, chapters, filenames) aceptan
-remote_host/remote_port opcionales, igual que run_transcribe(): si vienen
-dados, el modelo se carga y corre en el mediador de la LAN en vez de esta
-PC. Arma bloques, reintentos, contexto y el fallback offline siguen
+Las tres tools de traduccion (.srt, chapters, filenames) cargan y corren el
+modelo en el mediador de la LAN en vez de esta PC cuando se les pide modo
+remoto (.srt vía `target`; chapters/filenames aún vía remote_host/remote_port
+sueltos). Arma bloques, reintentos, contexto y el fallback offline siguen
 corriendo en este proceso sin importar el modo — lo unico que cambia es
 donde se ejecuta cada llamada puntual al modelo (ver
 core/translation/remote_backend.py). Por eso los eventos que emite cada
@@ -45,7 +48,6 @@ import json
 import shutil
 import sys
 import tempfile
-import time
 from pathlib import Path
 import os
 import subprocess
@@ -77,11 +79,13 @@ from core.models import (
     DivergeOptions,
     AudioToVideoOptions,
     TranscribeOptions,
+    TranslateOptions,
 )
 from pathlib import Path
 from core.translation.runner import TranslateRunner
 from core.translation.chapters_runner import ChaptersTranslateRunner
 from core.translation.filenames_runner import FilenameTranslateRunner
+from core.translation.job import resolve_translate, run_translate_job
 from core.translation import prompts as translation_prompts
 
 from util.image_optimizer import optimize_image, SUPPORTED_EXTS
@@ -725,164 +729,73 @@ class AudioToolsAPI:
 
     # — Translate: .srt —————————————————————————————————————————————————
 
-    def run_translate(
-        self,
-        file_paths: list[str],
-        base_folder: str,
-        output_subfolder: str = "english",
-        raw_title: str = "",
-        raw_publisher_info: str = "",
-        base_prompt: str = "",
-        glossary: str = "",
-        model: str = "",
-        n_gpu_layers: int | None = None,
-        n_ctx: int | None = None,
-        temperature: float | None = None,
-        source_language: str = "",
-        remote_host: str | None = None,
-        remote_port: int | None = None,
-    ) -> None:
+    def plan_translate(self, options: dict) -> dict:
         """
-        Traduce una cola de .srt (todos deben pertenecer a la misma obra,
-        ya que titulo/work_info se generan una sola vez para toda la corrida).
-        Salida en {base_folder}/transcriptions/{output_subfolder}.
+        Qué va a producir Translate (SRT), sin ejecutarlo: carpeta de salida y, por cada .srt,
+        dónde quedará su traducción (y si ya existe y se sobrescribirá). Es la misma
+        planificación que usa run_translate.
 
-        Si remote_host/remote_port vienen dados, el modelo se carga y
-        corre en el mediador en vez de esta PC — ver el docstring del
-        módulo, arriba.
+        Opciones (claves snake_case; ver core/models.py::TranslateOptions): las mismas que
+        run_translate, sin job_id.
+
+        Nunca lanza: devuelve {"error": "mensaje"} si algo falla (opciones inválidas, carpeta
+        base o algún .srt inexistente, subcarpeta con ruta, dos .srt que darían la misma
+        salida...); si todo va bien, {"output_dir": str, "files": [...]}. No crea carpetas ni
+        escribe nada.
         """
-        is_remote = remote_host is not None and remote_port is not None
+        try:
+            opts = TranslateOptions.from_dict(options)
+            return resolve_translate(opts).to_dict()
+        except Exception as exc:  # noqa: BLE001 - el frontend solo necesita el mensaje
+            return {"error": describe_error(exc)}
 
-        if is_remote:
-            from core.translation.remote_backend import RemoteLlamaBackend
-            runner = TranslateRunner(backend=RemoteLlamaBackend(remote_host, remote_port))
-            self._active_remote_runner = runner
-        else:
-            self._whisper.unload()
-            self._unload_all_translation_models(except_="srt")
-            runner = self._translate_runner
+    def run_translate(self, options: dict) -> None:
+        """
+        Traduce una cola de .srt (todos deben pertenecer a la misma obra, ya que título/work_info
+        se generan una sola vez para toda la corrida). Salida en
+        {base_folder}/transcriptions/{output_subfolder}. Retorna de inmediato: el avance llega
+        por los eventos audiotools:start/log/progress/done (todos con job_id) y, además, los
+        audiotools:translate:* propios (ver core/translation/job.py). Cualquier error antes de
+        arrancar el hilo llega como audiotools:done con success=false y error, nunca como
+        excepción.
 
-        out_dir = Path(base_folder) / "transcriptions" / output_subfolder
-        files = [(Path(p), out_dir / Path(p).name) for p in file_paths]
-
-        # Arranca ahora mismo (antes de la carga del modelo) — es el
-        # timestamp que se usa para el tiempo TOTAL del proceso, que si
-        # incluye la carga del modelo. Los timestamps por archivo son
-        # otros, propios de cada uno (ver on_file_start mas abajo), y esos
-        # NO incluyen la carga del modelo porque arrancan recien cuando el
-        # archivo empieza a procesarse de verdad.
-        queue_started_at = time.time()
-        _emit(self._window, "audiotools:translate:queue_started",
-              {"started_at": queue_started_at})
-
-        def on_log(msg):
-            _emit(self._window, "audiotools:log", {"message": msg})
-
-        def on_phase(msg):
-            _emit(self._window, "audiotools:translate:phase", {"phase": msg})
-
-        def on_step(step, status):
-            _emit(self._window, "audiotools:translate:step",
-                  {"step": step, "status": status})
-
-        def on_title(title):
-            _emit(self._window, "audiotools:translate:title", {"title": title})
-
-        def on_work_info(info):
-            _emit(self._window, "audiotools:translate:work_info",
-                  {"work_info": info})
-
-        def on_work_info_stream(text):
-            _emit(self._window, "audiotools:translate:work_info_stream",
-                  {"text": text})
-
-        def on_title_stream(text):
-            _emit(self._window, "audiotools:translate:title_stream",
-                  {"text": text})
-
-        def on_lines_progress(file_index, lines_done_file, lines_total_file, lines_done_global, lines_total_global):
-            _emit(self._window, "audiotools:translate:lines", {
-                "file_index": file_index,
-                "lines_done_file": lines_done_file,
-                "lines_total_file": lines_total_file,
-                "lines_done_global": lines_done_global,
-                "lines_total_global": lines_total_global,
-            })
-
-        def on_file_start(idx, total, name, started_at):
-            _emit(self._window, "audiotools:file",
-                  {"index": idx, "done": False, "started_at": started_at})
-
-        def on_file_done(idx, success, elapsed):
-            _emit(self._window, "audiotools:file",
-                  {"index": idx, "done": True, "elapsed": elapsed})
-
-        def on_queue_progress(done, total):
-            _emit(self._window, "audiotools:progress", {
-                "value": (done / total) if total else 0, "file_index": done,
-                "file_progress": 0, "completed": done, "total": total,
-            })
-
-        def on_queue_done(succeeded, total, cancelled):
-            success = succeeded > 0 and not cancelled
-            _emit(self._window, "audiotools:done", {
-                "success": success,
-                "cancelled": cancelled,
-                "elapsed": time.time() - queue_started_at,
-            })
-            if is_remote:
-                self._active_remote_runner = None
-
-        def on_block_stream(file_index, text):
-            _emit(self._window, "audiotools:translate:block_stream",
-                  {"file_index": file_index, "text": text})
-
-        def on_block_input(file_index, text):
-            _emit(self._window, "audiotools:translate:block_input",
-                  {"file_index": file_index, "text": text})
-
-        def on_system_prompt(text, sections):
-            _emit(self._window, "audiotools:translate:system_prompt",
-                  {"text": text, "sections": sections})
-
-        def on_stats(run_id, stats):
-            _emit(self._window, "audiotools:translate:stats",
-                  {"run_id": run_id, **stats})
-
-        runner.run_queue(
-            files=files,
-            raw_title=raw_title,
-            raw_publisher_info=raw_publisher_info,
-            base_prompt=base_prompt,
-            glossary=glossary,
-            model=model,
-            n_gpu_layers=n_gpu_layers,
-            n_ctx=n_ctx,
-            temperature=temperature,
-            source_language=source_language,
-            output_subfolder=output_subfolder,
-            on_log=on_log,
-            on_phase=on_phase,
-            on_step=on_step,
-            on_title=on_title,
-            on_work_info=on_work_info,
-            on_work_info_stream=on_work_info_stream,
-            on_title_stream=on_title_stream,
-            on_lines_progress=on_lines_progress,
-            on_file_start=on_file_start,
-            on_file_done=on_file_done,
-            on_queue_progress=on_queue_progress,
-            on_queue_done=on_queue_done,
-            on_block_stream=on_block_stream,
-            on_block_input=on_block_input,
-            on_system_prompt=on_system_prompt,
-            on_stats=on_stats,
+        Opciones (claves snake_case): las mismas que plan_translate, más job_id (generado por el
+        frontend). `target` decide dónde se ejecuta: {"mode": "local"} (el modelo se carga en
+        esta PC) o {"mode": "remote", "host", "port"} (el mediador de la red); todo lo demás es
+        idéntico. Ver core/models.py::TranslateOptions.
+        """
+        events = JobEvents(
+            lambda event, detail: _emit(self._window, event, detail),
+            tool="translate",
+            job_id=job_id_from(options),
         )
+        with job_errors(events):
+            opts = TranslateOptions.from_dict(options)
+            plan = resolve_translate(opts)
 
-    def cancel_translate(self) -> None:
-        self._translate_runner.cancel()
-        if self._active_remote_runner is not None:
-            self._active_remote_runner.cancel()
+            if opts.target is not None:
+                from core.translation.remote_backend import RemoteLlamaBackend
+                runner = TranslateRunner(backend=RemoteLlamaBackend(opts.target.host, opts.target.port))
+                self._active_remote_runner = runner
+            else:
+                # Mismo orden que antes del contrato: primero whisper (otro proceso que compite
+                # por la misma VRAM), después los otros dos traductores LLM.
+                self._whisper.unload()
+                self._unload_all_translation_models(except_="srt")
+                runner = self._translate_runner
+
+            def release_remote() -> None:
+                if opts.target is not None:
+                    self._active_remote_runner = None
+
+            def emit(event: str, detail: dict) -> None:
+                _emit(self._window, event, detail)
+
+            try:
+                run_translate_job(runner, plan, opts, events, emit, on_finished=release_remote)
+            except BaseException:
+                release_remote()  # el runner no llegó a arrancar: no queda nada que cancelar
+                raise
 
     def list_translation_models(self) -> list[str]:
         return self._translate_runner.list_models()

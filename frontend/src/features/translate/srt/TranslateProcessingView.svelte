@@ -8,6 +8,7 @@
    import ProgressBar from "@shared/ui/ProgressBar.svelte";
    import LogsModal from "@shared/components/LogsModal.svelte";
    import Spinner from "@shared/ui/Spinner.svelte";
+   import ConfirmModal from "@shared/ui/ConfirmModal.svelte";
 
    let { goHome, fileInfos = [], outputPath = "", onCancel, onBack } = $props();
 
@@ -326,7 +327,37 @@
 
    const finished = $derived(!progress.running && progress.success !== null);
    let showLogs = $state(false);
+
+   // "← Inicio" con una traducción en curso: antes volvía al menú sin cancelar el job, que
+   // seguía corriendo en el backend sin que nadie lo viera. Ahora avisa primero.
+   let showLeaveConfirm = $state(false);
+
+   function requestGoHome() {
+      if (progress.running) {
+         showLeaveConfirm = true;
+      } else {
+         goHome();
+      }
+   }
+
+   function confirmLeave() {
+      showLeaveConfirm = false;
+      onCancel?.();
+      goHome();
+   }
 </script>
+
+{#if showLeaveConfirm}
+   <ConfirmModal
+      title="Hay una traducción en curso"
+      message="Si vuelves al inicio ahora, se cancela. ¿Seguro que quieres salir?"
+      confirmLabel="Cancelar y volver al inicio"
+      cancelLabel="Seguir traduciendo"
+      danger
+      onConfirm={confirmLeave}
+      onCancel={() => (showLeaveConfirm = false)}
+   />
+{/if}
 
 {#if showLogs}
    <LogsModal logs={progress.logs} onClose={() => (showLogs = false)} />
@@ -730,7 +761,7 @@
 <div class="flex h-full flex-col">
    <!-- Header -->
    <header class="flex items-center border-b border-white/5 px-8 py-5 shrink-0">
-      <button class="text-white/30 hover:text-white transition-colors text-sm" onclick={goHome}> ← Inicio </button>
+      <button class="text-white/30 hover:text-white transition-colors text-sm" onclick={requestGoHome}> ← Inicio </button>
       <span class="text-white/10 mx-3">/</span>
       <h1 class="text-sm font-semibold flex-1">Translate</h1>
 

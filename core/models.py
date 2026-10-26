@@ -1,4 +1,5 @@
 import math
+import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
@@ -594,3 +595,136 @@ class TranscribeOptions:
             )
             for path, duration in zip(self.file_paths, durations)
         ]
+
+
+_TRANSLATE_DRIVE = re.compile(r"^[A-Za-z]:")
+_TRANSLATE_SUBFOLDER_HELP = (
+    "La opción «output_subfolder» debe ser un solo nombre de carpeta (sin \\ o / ni rutas)."
+)
+
+
+def _resolve_translate_subfolder(raw: str | None) -> str:
+    """
+    Mismo saneamiento que transcription.options.resolve_subfolder (un solo nombre de carpeta,
+    sin separadores ni rutas — de lo contrario «../../x» escribiría fuera de la carpeta base),
+    pero con un default fijo ("english": Translate siempre traduce A inglés, no hay un idioma
+    de destino que mapear como hace Transcribe). No se comparte el mismo helper porque ese
+    recibe un código de idioma y busca su nombre en LANGUAGES; acá no hay nada que buscar.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return "english"
+    if "/" in text or "\\" in text or _TRANSLATE_DRIVE.match(text) or text in (".", ".."):
+        raise ValueError(_TRANSLATE_SUBFOLDER_HELP)
+    clean = sanitize_name(text).rstrip(". ")
+    if not clean:
+        raise ValueError(f"La subcarpeta «{text}» no es un nombre válido.")
+    return clean
+
+
+@dataclass
+class TranslateOptions:
+    """
+    Opciones de api.run_translate / api.plan_translate (traducción de .srt) tal como llegan del
+    frontend (claves snake_case). `from_dict` valida claves y valores y levanta ValueError con un
+    mensaje legible.
+
+    file_paths            .srt a traducir, en orden (mínimo 1); deben pertenecer a la misma obra,
+                           ya que título/work_info se generan una sola vez para toda la corrida
+    base_folder            carpeta base: las salidas van a <base>/transcriptions/<subcarpeta>
+    output_subfolder       UN nombre de carpeta; vacío o ausente = "english" (ver
+                           _resolve_translate_subfolder). Tras `from_dict` es siempre texto ya
+                           resuelto y saneado
+    raw_title               título original (opcional); se traduce una vez para toda la corrida
+    raw_publisher_info      ficha/descripción del publisher (opcional); genera el work_info
+    base_prompt             prompt de traducción (del idioma elegido)
+    glossary                glosario fijo del idioma (se inyecta en el prompt final)
+    model                   nombre del modelo .gguf; con target remoto, uno de la lista del
+                           mediador (que es quien la conoce); en local, no se valida contra
+                           una lista fija (list_translation_models() escanea el disco)
+    n_gpu_layers / n_ctx     enteros; los defaults de config.py son letra muerta hoy (la UI
+                           siempre manda un valor), así que no se tratan como opcionales
+    temperature             float
+    source_language          idioma de origen (carpeta de core/translation/prompts/); no se valida
+                           contra una lista fija acá (esa carpeta es dinámica, la lee
+                           list_prompt_languages() del lado del backend; el frontend ya restringe
+                           la selección a esa lista)
+    target                  {"mode": "local"} | {"mode": "remote", "host", "port"} (ver
+                           core/network/remote_target.py); tras `from_dict` es None (local) o un
+                           RemoteTarget
+    job_id                  lo genera el frontend (ver core/jobs.py)
+    """
+
+    file_paths: list[str]
+    base_folder: str
+    output_subfolder: str = "english"
+    raw_title: str = ""
+    raw_publisher_info: str = ""
+    base_prompt: str = ""
+    glossary: str = ""
+    model: str = ""
+    n_gpu_layers: int = 20
+    n_ctx: int = 4096
+    temperature: float = 0.3
+    source_language: str = ""
+    target: RemoteTarget | None = None
+    job_id: str | None = None
+
+    _REQUIRED = ("file_paths", "base_folder")
+
+    @classmethod
+    def from_dict(cls, raw) -> "TranslateOptions":
+        if not isinstance(raw, dict):
+            raise ValueError("Las opciones deben ser un objeto.")
+
+        known = {f.name for f in fields(cls)}
+        unknown = sorted(set(raw) - known)
+        if unknown:
+            raise ValueError("Opciones desconocidas: " + ", ".join(unknown))
+        missing = [k for k in cls._REQUIRED if k not in raw]
+        if missing:
+            raise ValueError("Faltan opciones: " + ", ".join(missing))
+
+        paths = raw["file_paths"]
+        if not isinstance(paths, list) or not all(isinstance(p, str) and p.strip() for p in paths):
+            raise ValueError("La opción «file_paths» debe ser una lista de rutas.")
+        if not paths:
+            raise ValueError("Selecciona al menos un .srt.")
+
+        target = parse_target(raw.get("target"))
+
+        model = raw.get("model", "")
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError("Selecciona un modelo.")
+
+        n_gpu_layers = _whole_number(raw, "n_gpu_layers", 20)
+        n_ctx = _whole_number(raw, "n_ctx", 4096)
+
+        temperature = raw.get("temperature", 0.3)
+        if not _is_number(temperature):
+            raise ValueError("La opción «temperature» debe ser un número.")
+
+        for key in ("raw_title", "raw_publisher_info", "base_prompt", "glossary", "source_language"):
+            value = raw.get(key, "")
+            if not isinstance(value, str):
+                raise ValueError(f"La opción «{key}» debe ser un texto.")
+
+        if raw.get("job_id") is not None and job_id_from(raw) is None:
+            raise ValueError("La opción «job_id» no es válida.")
+
+        return cls(
+            file_paths=list(paths),
+            base_folder=_require_text(raw, "base_folder"),
+            output_subfolder=_resolve_translate_subfolder(raw.get("output_subfolder")),
+            raw_title=raw.get("raw_title", ""),
+            raw_publisher_info=raw.get("raw_publisher_info", ""),
+            base_prompt=raw.get("base_prompt", ""),
+            glossary=raw.get("glossary", ""),
+            model=model.strip(),
+            n_gpu_layers=n_gpu_layers,
+            n_ctx=n_ctx,
+            temperature=float(temperature),
+            source_language=raw.get("source_language", ""),
+            target=target,
+            job_id=job_id_from(raw),
+        )

@@ -22,13 +22,17 @@ Eventos (los nombres `audiotools:*` no cambian; se añaden `start` y `job_id`):
     audiotools:start     { job_id, tool, total }
     audiotools:log       { job_id, message }
     audiotools:progress  { job_id, value, file_index, file_progress, completed, total }
-    audiotools:done      { job_id, tool, success, cancelled, error?, warning? }
+    audiotools:done      { job_id, tool, success, cancelled, error?, warning?, elapsed? }
 
 Cancelar NO es un error: llega como done{success:false, cancelled:true} y sin
 `error`. `cancelled` solo puede ser true si success es false.
 
 `warning` acompaña a un job que terminó bien pero con algo que el usuario debe
 saber (p. ej. el audio se unió pero no se pudieron incrustar los capítulos).
+
+`elapsed` es opcional: el tiempo total medido por el propio backend (más preciso
+que aproximarlo del lado del frontend con Date.now()). Sin él, el frontend cae
+a su propio cálculo.
 
 `job_id` lo genera el frontend y viaja en las opciones; así el frontend puede
 descartar eventos rezagados de una ejecución anterior (p. ej. el `done` de un
@@ -108,6 +112,7 @@ class JobEvents:
         error: Optional[str] = None,
         cancelled: bool = False,
         warning: Optional[str] = None,
+        elapsed: Optional[float] = None,
     ) -> None:
         detail: dict[str, Any] = {
             "job_id": self.job_id,
@@ -119,6 +124,8 @@ class JobEvents:
             detail["error"] = error
         if warning is not None:
             detail["warning"] = warning
+        if elapsed is not None:
+            detail["elapsed"] = elapsed
         self._emit("audiotools:done", detail)
 
 
