@@ -6,7 +6,6 @@ import pytest
 
 from core import chapters_metadata
 from core.chapters_metadata import embed_chapters, write_ffmetadata
-from core.translation.chapters_runner import ChaptersTranslateRunner
 
 CHAPTERS = [
     {"title": "a", "start": 0.0, "end": 10.5},
@@ -64,24 +63,6 @@ def test_consecutive_chapters_have_no_gap_or_overlap(tmp_path):
     starts = [int(s) for s in re.findall(r"START=(\d+)", text)]
     ends = [int(e) for e in re.findall(r"END=(\d+)", text)]
     assert starts[1:] == ends[:-1]
-
-
-def test_same_format_as_the_chapters_translator(tmp_path, monkeypatch):
-    """
-    El traductor de capítulos tiene hoy su propia copia de este formato y pasará a usar este
-    módulo. Este test fija que ambos producen el mismo texto, para poder unificarlos sin cambios.
-    """
-    monkeypatch.chdir(tmp_path)
-    translator_chapters = [
-        {"index": 1, "title": "x", "start": 0.0, "end": 10.5},
-        {"index": 2, "title": "x", "start": 10.5, "end": 15.5},
-    ]
-    ChaptersTranslateRunner()._write_metadata(translator_chapters, ["a", "b"])
-    theirs = (tmp_path / "_chapters_translate_metadata.txt").read_text(encoding="utf-8")
-
-    out = tmp_path / "meta.txt"
-    write_ffmetadata(out, CHAPTERS)
-    assert out.read_text(encoding="utf-8") == theirs
 
 
 # ── embed_chapters (subprocess simulado) ─────────────────────────────────

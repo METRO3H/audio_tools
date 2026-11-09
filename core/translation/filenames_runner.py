@@ -43,6 +43,19 @@ class FilenameTranslateRunner:
     def cancel(self) -> None:
         self._cancelled = True
 
+    @property
+    def cancelled(self) -> bool:
+        """
+        Si cancel() se llamó durante la última translate_preview(). Existe porque, a diferencia
+        de TranslateRunner/ChaptersTranslateRunner, translate_preview() no tiene un callback de
+        "terminó, y así terminó" — cuando se cancela, simplemente retorna la lista con los
+        nombres SIN traducir (mismo shape que un éxito real), así que sin esto el caller no
+        tiene forma de distinguir "nada necesitaba traducción" de "se canceló a mitad de camino"
+        (bug real: antes de esto, cancelar durante filenames mostraba una vista previa "exitosa"
+        con todos los nombres iguales a los originales, sin avisar que en realidad se canceló).
+        """
+        return self._cancelled
+
     def scan(self, folder: Path) -> list[dict]:
         """
         Recorre `folder` recursivamente. Para cada archivo o carpeta,

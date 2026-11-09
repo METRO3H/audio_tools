@@ -1,38 +1,33 @@
-
 from __future__ import annotations
 
-import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Callable
 
-import config
 from core.translation.model_manager import ModelManager, TranslationBackend
 from core.translation import prompts
 
 
 class ChaptersTranslateRunner:
     """
-    Traduce los titulos de los chapters embebidos en un archivo de audio/
-    video, y genera una COPIA del archivo con esos titulos ya traducidos.
+    Traduce los títulos de los chapters embebidos en una cola de archivos de audio/video. NO
+    escribe nada en disco — eso es trabajo de ChaptersAction.apply (core/translation/
+    chapters_action.py), que corre después, solo sobre lo que el usuario confirma o edita en la
+    vista previa (ver core/translation/job.py y api.py).
 
-    Reusa exactamente el mismo mecanismo que MergeAudioAction.add_chapters:
-    escribe un archivo FFMETADATA1 con bloques [CHAPTER], y usa
-    `ffmpeg -map_metadata 1 -c copy` para re-muxear sin re-codificar nada.
-    La unica diferencia es que aca el START/END ya existe (viene de
-    get_chapters()) y lo que cambia es el titulo.
-
-    Independiente de la tool de .srt: preset y work_info propios (sin
-    concepto de "titulo de la obra", eso no aplica aca).
+    Independiente de la tool de .srt: preset y work_info propios (un work_info para TODA la
+    cola, generado una sola vez — se asume que los archivos pertenecen a la misma obra, misma
+    idea que título/work_info en Translate SRT). Sin concepto de "título de la obra": acá no
+    aplica.
     """
-
-    _METADATA_FILE = Path("_chapters_translate_metadata.txt")
 
     def __init__(self, backend: TranslationBackend | None = None) -> None:
         self._manager = ModelManager(backend=backend)
         self._cancelled = False
+        self._was_cancelled = False
 
-    # ── API publica ──────────────────────────────────────────────────────
+    # ── API pública ──────────────────────────────────────────────────────
 
     def list_models(self) -> list[str]:
         return self._manager.list_models()
@@ -43,41 +38,44 @@ class ChaptersTranslateRunner:
     def cancel(self) -> None:
         self._cancelled = True
 
-    def run(
+    def translate_queue(
         self,
-        input_file: Path,
-        output_file: Path,
-        chapters: list[dict],
-        raw_publisher_info: str,
-        base_prompt: str,
+        files: list[tuple[Path, list[dict]]],  # (path, chapters) por archivo
+        raw_publisher_info: str = "",
+        base_prompt: str = "",
         glossary: str = "",
         model: str = "",
-        n_gpu_layers: int | None = None,
-        n_ctx: int | None = None,
-        temperature: float | None = None,
+        n_gpu_layers: int = 20,
+        n_ctx: int = 4096,
+        temperature: float = 0.3,
         on_log: Callable[[str], None] | None = None,
         on_phase: Callable[[str], None] | None = None,
         on_work_info: Callable[[str], None] | None = None,
         on_work_info_stream: Callable[[str], None] | None = None,
-        on_done: Callable[[bool], None] | None = None,
+        on_file_start: Callable[[int, int, str, float], None] | None = None,
+        on_file_titles: Callable[[int, list[dict]], None] | None = None,
+        on_file_done: Callable[[int, bool, float], None] | None = None,
+        on_queue_progress: Callable[[int, int], None] | None = None,
+        on_queue_done: Callable[[int, int, bool, list], None] | None = None,
     ) -> None:
         self._cancelled = False
+        self._was_cancelled = False
         threading.Thread(
-            target=self._worker,
+            target=self._queue_worker,
             args=(
-                input_file, output_file, chapters, raw_publisher_info, base_prompt, glossary,
-                model, n_gpu_layers, n_ctx, temperature,
-                on_log, on_phase, on_work_info, on_work_info_stream, on_done,
+                files, raw_publisher_info, base_prompt, glossary, model, n_gpu_layers, n_ctx, temperature,
+                on_log, on_phase, on_work_info, on_work_info_stream,
+                on_file_start, on_file_titles, on_file_done, on_queue_progress, on_queue_done,
             ),
             daemon=True,
         ).start()
 
     # ── Worker ───────────────────────────────────────────────────────────
 
-    def _worker(
-        self, input_file, output_file, chapters, raw_publisher_info, base_prompt, glossary,
-        model, n_gpu_layers, n_ctx, temperature,
-        on_log, on_phase, on_work_info, on_work_info_stream, on_done,
+    def _queue_worker(
+        self, files, raw_publisher_info, base_prompt, glossary, model, n_gpu_layers, n_ctx, temperature,
+        on_log, on_phase, on_work_info, on_work_info_stream,
+        on_file_start, on_file_titles, on_file_done, on_queue_progress, on_queue_done,
     ):
         def log(msg):
             if on_log: on_log(msg)
@@ -85,16 +83,18 @@ class ChaptersTranslateRunner:
         def phase(msg):
             if on_phase: on_phase(msg)
 
-        n_gpu_layers = n_gpu_layers if n_gpu_layers is not None else config.TRANSLATION_N_GPU_LAYERS
-        n_ctx        = n_ctx        if n_ctx        is not None else config.TRANSLATION_N_CTX
-        temp         = temperature  if temperature  is not None else config.TRANSLATION_TEMPERATURE
+        total = len(files)
+        # (path, [{index, start, end, original_title, translated_title}]) por archivo ya
+        # traducido — es lo que termina en audiotools:chapters:preview_ready.
+        results: list[tuple[Path, list[dict]]] = []
 
         try:
             phase("Cargando modelo...")
             log(f"Cargando modelo {model}...")
             self._manager.load(model, n_gpu_layers, n_ctx)
             if self._cancelled:
-                if on_done: on_done(False)
+                self._was_cancelled = True
+                if on_queue_done: on_queue_done(0, total, True, results)
                 return
 
             work_info = ""
@@ -104,83 +104,55 @@ class ChaptersTranslateRunner:
                 work_info = self._manager.generate_text(
                     prompts.get_shared_prompt("work_info_extraction"),
                     raw_publisher_info.strip(),
-                    temperature=temp,
+                    temperature=temperature,
                     on_stream=(lambda tokens, text: on_work_info_stream(text)) if on_work_info_stream else None,
                 )
                 log(f"Work info generado:\n{work_info}")
                 if on_work_info: on_work_info(work_info)
 
             if self._cancelled:
-                if on_done: on_done(False)
+                self._was_cancelled = True
+                if on_queue_done: on_queue_done(0, total, True, results)
                 return
 
-            phase(f"Traduciendo {len(chapters)} titulos de capitulo...")
-            log(f"Traduciendo {len(chapters)} titulos de capitulo...")
-            system_prompt = prompts.build_short_text_prompt(
-                base_prompt, glossary, work_info,
-            )
-            titles = [ch["title"] for ch in chapters]
-            translated_titles = self._manager.translate_texts(
-                titles, system_prompt, temperature=temp, on_retry_log=log,
-            )
+            system_prompt = prompts.build_short_text_prompt(base_prompt, glossary, work_info)
 
-            for ch, new_title in zip(chapters, translated_titles):
-                log(f"  [{ch['index']}] {ch['title']} -> {new_title}")
+            succeeded = 0
+            for idx, (path, chapters) in enumerate(files):
+                if self._cancelled:
+                    self._was_cancelled = True
+                    break
 
-            if self._cancelled:
-                if on_done: on_done(False)
-                return
+                started_at = time.time()
+                if on_file_start: on_file_start(idx, total, path.name, started_at)
 
-            phase("Escribiendo archivo con chapters traducidos...")
-            log("Re-muxeando archivo con los titulos traducidos...")
-            self._write_metadata(chapters, translated_titles)
-
-            temp_out = output_file.with_suffix(".chapters_tmp" + output_file.suffix)
-            try:
-                result = subprocess.run(
-                    [
-                        str(config.FFMPEG_BIN), "-y",
-                        "-i", str(input_file),
-                        "-i", str(self._METADATA_FILE),
-                        "-map_metadata", "1",
-                        "-c", "copy",
-                        str(temp_out),
-                    ],
-                    capture_output=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
+                phase(f"Traduciendo {len(chapters)} títulos de «{path.name}»...")
+                log(f"Traduciendo {len(chapters)} títulos de capítulo de «{path.name}»...")
+                titles = [ch["title"] for ch in chapters]
+                translated_titles = self._manager.translate_texts(
+                    titles, system_prompt, temperature=temperature, on_retry_log=log,
                 )
-                if result.returncode == 0 and temp_out.exists():
-                    output_file.parent.mkdir(parents=True, exist_ok=True)
-                    temp_out.replace(output_file)
-                    log(f"Guardado: {output_file}")
-                    if on_done: on_done(True)
-                else:
-                    stderr = result.stderr.decode(errors="ignore") if result.stderr else ""
-                    log(f"[error] ffmpeg fallo: {stderr}")
-                    if on_done: on_done(False)
-            finally:
-                if temp_out.exists():
-                    temp_out.unlink()
-                if self._METADATA_FILE.exists():
-                    self._METADATA_FILE.unlink()
+
+                file_result = [
+                    {
+                        "index": ch["index"], "start": ch["start"], "end": ch["end"],
+                        "original_title": ch["title"], "translated_title": new_title,
+                    }
+                    for ch, new_title in zip(chapters, translated_titles)
+                ]
+                for row in file_result:
+                    log(f"  [{row['index']}] {row['original_title']} -> {row['translated_title']}")
+                results.append((path, file_result))
+
+                if on_file_titles: on_file_titles(idx, file_result)
+                succeeded += 1
+                if on_file_done: on_file_done(idx, True, time.time() - started_at)
+                if on_queue_progress: on_queue_progress(idx + 1, total)
+
+            if on_queue_done:
+                on_queue_done(succeeded, total, self._was_cancelled, results)
 
         except Exception as exc:
             log(f"[error fatal] {exc}")
-            if on_done: on_done(False)
-
-    def _write_metadata(self, chapters: list[dict], translated_titles: list[str]) -> None:
-        lines = [";FFMETADATA1", ""]
-        for ch, title in zip(chapters, translated_titles):
-            start_ms = int(ch["start"] * 1000)
-            end_ms = int(ch["end"] * 1000)
-            safe_title = title.replace("\n", " ").strip()
-            lines += [
-                "[CHAPTER]",
-                "TIMEBASE=1/1000",
-                f"START={start_ms}",
-                f"END={end_ms}",
-                f"title={safe_title}",
-                "",
-            ]
-        self._METADATA_FILE.write_text("\n".join(lines), encoding="utf-8")
-
+            if on_queue_done:
+                on_queue_done(0, total, self._was_cancelled, results)

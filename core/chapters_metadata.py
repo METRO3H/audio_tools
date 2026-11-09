@@ -4,8 +4,9 @@ core/chapters_metadata.py
 Capítulos de un archivo multimedia: escritura del archivo de metadatos
 (formato FFMETADATA1 de ffmpeg) e incrustación en un archivo ya generado.
 
-Lo usa Merge. El traductor de capítulos tiene hoy su propia copia de esta lógica
-y pasará a usar este módulo (hay un test que fija que ambos formatos coinciden).
+Lo usa Merge (para incrustar capítulos sin traducir) y Translate Chapters, vía
+core/translation/chapters_action.py::ChaptersAction.apply (para escribir los títulos ya
+traducidos, sobre el mismo archivo).
 """
 
 from __future__ import annotations

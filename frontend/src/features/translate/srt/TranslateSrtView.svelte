@@ -11,7 +11,8 @@
    import BaseFolderPicker from "@shared/components/BaseFolderPicker.svelte";
    import TranslationSettings from "@shared/components/TranslationSettings.svelte";
    import Modal from "@shared/ui/Modal.svelte";
-   import { persistentConfig } from "@shared/services/persistentConfig.js";
+   import PromptEditorModal from "@shared/components/PromptEditorModal.svelte";
+   import { persisted } from "@shared/state/persisted.svelte.js";
 
    let { goHome } = $props();
 
@@ -24,7 +25,10 @@
 
    let fileInfos = $state([]); // [{name, path, size_mb, duration_seconds}]
    let autoHint = $state("");
-   let outputSubfolder = $state("english");
+
+   // Idioma/subcarpeta: independientes del modo (local/remoto) — a diferencia de modelo/GPU/
+   // ctx/temperatura (ver TranslationSettings), estos no se duplican por modo.
+   const langConfig = persisted("translate_srt_config", { selectedLanguage: "", outputSubfolder: "english" });
 
    let rawTitle = $state("");
    let rawPublisherInfo = $state("");
@@ -38,7 +42,6 @@
    let workInfoPromptDirty = $state(false);
 
    let languages = $state([]); // ["japanese", "chinese", ...] — carpetas de prompts/
-   let selectedLanguage = $state("");
    let translationPrompt = $state("");
    let promptDirty = $state(false);
    let showPromptModal = $state(false);
@@ -56,39 +59,23 @@
    // el porqué de guardarlos por separado según el modo.
    let settings = $state(undefined);
 
-   // ── Cargar configuración guardada (idioma/subcarpeta — independiente del modo) ──
-
-   $effect(() => {
-      const saved = persistentConfig.get("translate_srt_config");
-      if (saved) {
-         selectedLanguage = saved.selectedLanguage ?? "";
-         outputSubfolder = saved.outputSubfolder ?? "english";
-      }
-   });
-
-   // ── Guardar configuración al cambiar ────────────────────────────────────────
-
-   $effect(() => {
-      persistentConfig.set("translate_srt_config", {
-         selectedLanguage,
-         outputSubfolder,
-      });
-   });
-
    // ── Carga inicial (idioma/prompt/glossary — independiente del modo) ─────────
+   // El idioma/subcarpeta ya vienen de localStorage vía persisted() (langConfig, arriba); acá
+   // solo falta elegir un default si no había nada guardado, y traer prompt/glossary de ESE
+   // idioma.
 
    $effect(() => {
       (async () => {
          languages = await bridge.list_prompt_languages();
-         if (languages.length && !selectedLanguage) {
-            selectedLanguage = languages.includes("japanese") ? "japanese" : languages[0];
-            translationPrompt = await bridge.get_translation_prompt(selectedLanguage, "srt");
-            glossaryText = await bridge.get_glossary(selectedLanguage);
+         if (languages.length && !langConfig.selectedLanguage) {
+            langConfig.selectedLanguage = languages.includes("japanese") ? "japanese" : languages[0];
+            translationPrompt = await bridge.get_translation_prompt(langConfig.selectedLanguage, "srt");
+            glossaryText = await bridge.get_glossary(langConfig.selectedLanguage);
             promptDirty = false;
             glossaryDirty = false;
          }
          // El prompt de extracción es compartido entre todos los idiomas,
-         // así que se carga una sola vez, sin depender de selectedLanguage.
+         // así que se carga una sola vez, sin depender del idioma elegido.
          workInfoPrompt = await bridge.get_shared_prompt("work_info_extraction");
          workInfoPromptDirty = false;
       })();
@@ -113,7 +100,7 @@
    // ── Derivados ────────────────────────────────────────────────────────────────
 
    const outputPath = $derived(
-      appConfig.baseFolder ? `${appConfig.baseFolder}\\transcriptions\\${outputSubfolder}` : "",
+      appConfig.baseFolder ? `${appConfig.baseFolder}\\transcriptions\\${langConfig.outputSubfolder}` : "",
    );
 
    const canRun = $derived(
@@ -135,7 +122,7 @@
       fileInfos = infos.map((info, i) => ({ ...info, path: result.files[i] }));
       autoHint = `✓ ${infos.length} archivo(s) detectados en transcriptions/${result.source}`;
 
-      if (languages.includes(result.source) && selectedLanguage !== result.source) {
+      if (languages.includes(result.source) && langConfig.selectedLanguage !== result.source) {
          await onSelectLanguage(result.source);
       }
    }
@@ -155,7 +142,7 @@
    // ── Idioma / prompt / glosario ──────────────────────────────────────────────
 
    async function onSelectLanguage(lang) {
-      selectedLanguage = lang;
+      langConfig.selectedLanguage = lang;
       translationPrompt = await bridge.get_translation_prompt(lang, "srt");
       glossaryText = await bridge.get_glossary(lang);
       promptDirty = false;
@@ -167,7 +154,7 @@
    }
 
    async function savePrompt() {
-      await bridge.save_translation_prompt(selectedLanguage, "srt", translationPrompt);
+      await bridge.save_translation_prompt(langConfig.selectedLanguage, "srt", translationPrompt);
       promptDirty = false;
    }
 
@@ -176,7 +163,7 @@
    }
 
    async function saveGlossary() {
-      await bridge.save_glossary(selectedLanguage, glossaryText);
+      await bridge.save_glossary(langConfig.selectedLanguage, glossaryText);
       glossaryDirty = false;
    }
 
@@ -204,7 +191,7 @@
       await job.start({
          file_paths: fileInfos.map((f) => f.path),
          base_folder: appConfig.baseFolder,
-         output_subfolder: outputSubfolder,
+         output_subfolder: langConfig.outputSubfolder,
          raw_title: rawTitle,
          raw_publisher_info: rawPublisherInfo,
          base_prompt: translationPrompt,
@@ -213,7 +200,7 @@
          n_gpu_layers: settings.nGpuLayers,
          n_ctx: settings.nCtx,
          temperature: settings.temperature,
-         source_language: selectedLanguage,
+         source_language: langConfig.selectedLanguage,
          target: target.target,
       });
    }
@@ -334,87 +321,32 @@
 {/if}
 
 {#if showPromptModal}
-   <Modal onClose={() => (showPromptModal = false)} size="5xl" height="max-90" label="Prompt" class="gap-4">
-      <div class="flex items-center justify-between">
-         <h2 class="text-sm font-semibold text-white">
-            Prompt {promptDirty ? "· sin guardar" : ""}
-         </h2>
-         <button class="text-white/30 hover:text-white transition-colors cursor-pointer" onclick={() => (showPromptModal = false)}>
-            ✕
-         </button>
-      </div>
-
-      <div class="flex items-center gap-2 shrink-0">
-         <select
-            value={selectedLanguage}
-            onchange={(e) => onSelectLanguage(e.target.value)}
-            class="flex-1 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5
-               text-xs text-white outline-none focus:border-indigo-500/50 transition-colors cursor-pointer"
-         >
-            {#each languages as lang (lang)}
-               <option value={lang}>{languageLabel(lang)}</option>
-            {/each}
-         </select>
-         <button
-            class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10 cursor-pointer"
-            onclick={savePrompt}
-            title="Guardar"
-         >
-            💾
-         </button>
-      </div>
-
-      <textarea
-         bind:value={translationPrompt}
-         oninput={onPromptEdit}
-         class="w-full flex-1 min-h-[65vh] resize-none rounded-lg border border-white/10 bg-white/5 px-3 py-2
-            text-xs text-white/80 outline-none focus:border-indigo-500/50 transition-colors font-mono"
-      ></textarea>
-   </Modal>
+   <PromptEditorModal
+      title="Prompt"
+      {languages}
+      selectedLanguage={langConfig.selectedLanguage}
+      {onSelectLanguage}
+      bind:value={translationPrompt}
+      dirty={promptDirty}
+      onInput={onPromptEdit}
+      onSave={savePrompt}
+      onClose={() => (showPromptModal = false)}
+   />
 {/if}
 
 {#if showGlossaryModal}
-   <Modal onClose={() => (showGlossaryModal = false)} size="5xl" height="max-90" label="Glossary" class="gap-4">
-      <div class="flex items-center justify-between">
-         <h2 class="text-sm font-semibold text-white">
-            Glossary {glossaryDirty ? "· sin guardar" : ""}
-         </h2>
-         <button class="text-white/30 hover:text-white transition-colors cursor-pointer" onclick={() => (showGlossaryModal = false)}>
-            ✕
-         </button>
-      </div>
-      <p class="text-[11px] text-white/30 shrink-0">
-         Términos fijos por idioma, compartidos entre .srt, chapters y filenames — se inyectan solos en el prompt
-         final.
-      </p>
-
-      <div class="flex items-center gap-2 shrink-0">
-         <select
-            value={selectedLanguage}
-            onchange={(e) => onSelectLanguage(e.target.value)}
-            class="flex-1 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5
-               text-xs text-white outline-none focus:border-indigo-500/50 transition-colors cursor-pointer"
-         >
-            {#each languages as lang (lang)}
-               <option value={lang}>{languageLabel(lang)}</option>
-            {/each}
-         </select>
-         <button
-            class="rounded px-2 py-1.5 text-[11px] text-white/50 hover:text-white hover:bg-white/10 cursor-pointer"
-            onclick={saveGlossary}
-            title="Guardar"
-         >
-            💾
-         </button>
-      </div>
-
-      <textarea
-         bind:value={glossaryText}
-         oninput={onGlossaryEdit}
-         class="w-full flex-1 min-h-[65vh] resize-none rounded-lg border border-white/10 bg-white/5 px-3 py-2
-            text-xs text-white/80 outline-none focus:border-indigo-500/50 transition-colors font-mono"
-      ></textarea>
-   </Modal>
+   <PromptEditorModal
+      title="Glossary"
+      description="Términos fijos por idioma, compartidos entre .srt, chapters y filenames — se inyectan solos en el prompt final."
+      {languages}
+      selectedLanguage={langConfig.selectedLanguage}
+      {onSelectLanguage}
+      bind:value={glossaryText}
+      dirty={glossaryDirty}
+      onInput={onGlossaryEdit}
+      onSave={saveGlossary}
+      onClose={() => (showGlossaryModal = false)}
+   />
 {/if}
 
 {#if target.mode === null}
@@ -512,7 +444,7 @@
                >
                   <span class="text-white/60 truncate">Prompt</span>
                   <span class="text-white/30 shrink-0 ml-2 truncate">
-                     {languageLabel(selectedLanguage)}{promptDirty ? " ·" : ""}
+                     {languageLabel(langConfig.selectedLanguage)}{promptDirty ? " ·" : ""}
                   </span>
                </button>
 
@@ -523,7 +455,7 @@
                >
                   <span class="text-white/60 truncate">Glossary</span>
                   <span class="text-white/30 shrink-0 ml-2 truncate">
-                     {languageLabel(selectedLanguage)}{glossaryDirty ? " ·" : ""}
+                     {languageLabel(langConfig.selectedLanguage)}{glossaryDirty ? " ·" : ""}
                   </span>
                </button>
 
@@ -556,7 +488,7 @@
                   <input
                      id="outSub"
                      type="text"
-                     bind:value={outputSubfolder}
+                     bind:value={langConfig.outputSubfolder}
                      class="flex-1 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5
                         text-xs text-white outline-none focus:border-indigo-500/50 transition-colors"
                   />

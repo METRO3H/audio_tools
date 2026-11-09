@@ -194,9 +194,10 @@ def run_job(tmp_path, backend=None, names=("a.srt",), wait=True, **opt_overrides
     return runner, cap, plan
 
 
-def test_start_carries_the_total_and_the_job_id(tmp_path):
+def test_start_carries_the_total_and_the_job_id_and_fires_exactly_once(tmp_path):
     _, cap, _ = run_job(tmp_path, names=("a.srt", "b.srt"))
     assert cap.events[0] == ("audiotools:start", {"job_id": "job-1", "tool": "translate", "total": 2})
+    assert cap.names().count("audiotools:start") == 1
 
 
 def test_a_whole_job_writes_every_file_and_reports_the_contract(tmp_path):

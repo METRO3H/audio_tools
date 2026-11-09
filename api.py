@@ -80,12 +80,21 @@ from core.models import (
     AudioToVideoOptions,
     TranscribeOptions,
     TranslateOptions,
+    ChaptersOptions,
+    FilenamesOptions,
 )
 from pathlib import Path
 from core.translation.runner import TranslateRunner
 from core.translation.chapters_runner import ChaptersTranslateRunner
 from core.translation.filenames_runner import FilenameTranslateRunner
-from core.translation.job import resolve_translate, run_translate_job
+from core.translation.job import (
+    resolve_translate,
+    run_translate_job,
+    resolve_translate_chapters,
+    run_translate_chapters_job,
+    run_translate_filenames_job,
+)
+from core.translation.chapters_action import ChaptersAction
 from core.translation import prompts as translation_prompts
 
 from util.image_optimizer import optimize_image, SUPPORTED_EXTS
@@ -802,84 +811,71 @@ class AudioToolsAPI:
 
     # — Translate: chapters ——————————————————————————————————————
 
-    def run_translate_chapters(
-        self,
-        file_path: str,
-        output_path: str,
-        chapters: list[dict],
-        raw_publisher_info: str,
-        base_prompt: str,
-        glossary: str = "",
-        model: str = "",
-        n_gpu_layers: int | None = None,
-        n_ctx: int | None = None,
-        temperature: float | None = None,
-        remote_host: str | None = None,
-        remote_port: int | None = None,
-    ) -> None:
+    def plan_translate_chapters(self, options: dict) -> dict:
         """
-        Traduce los titulos de los chapters embebidos en file_path y genera
-        una copia en output_path con esos titulos ya traducidos (re-mux,
-        sin re-codificar). Independiente de la cola de .srt: preset y
-        work_info propios.
-
-        Si remote_host/remote_port vienen dados, el modelo se carga y
-        corre en el mediador — el re-mux con ffmpeg (que necesita el
-        archivo en esta máquina) sigue siendo siempre local.
+        Qué va a traducir Chapters: los capítulos ya existentes de cada archivo (ffprobe, de
+        solo lectura). Nunca lanza: {"error": "mensaje"} si algo falla (archivo inexistente,
+        algún archivo sin capítulos...); si todo va bien, {"files": [...]}. No escribe nada.
         """
-        is_remote = remote_host is not None and remote_port is not None
+        try:
+            opts = ChaptersOptions.from_dict(options)
+            get_chapters_bound = lambda p: get_chapters(config.FFPROBE_BIN, p)
+            return resolve_translate_chapters(opts, get_chapters_bound).to_dict()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": describe_error(exc)}
 
-        if is_remote:
-            from core.translation.remote_backend import RemoteLlamaBackend
-            runner = ChaptersTranslateRunner(backend=RemoteLlamaBackend(remote_host, remote_port))
-            self._active_remote_runner = runner
-        else:
-            self._whisper.unload()
-            self._unload_all_translation_models(except_="chapters")
-            runner = self._chapters_runner
+    def run_translate_chapters(self, options: dict) -> None:
+        """
+        Traduce los títulos de los capítulos de una cola de archivos — NO escribe nada en disco
+        (ver el docstring de core.models.ChaptersOptions): termina en
+        audiotools:chapters:preview_ready con los títulos traducidos de toda la cola, para que
+        el usuario confirme o edite antes de llamar a apply_translated_chapters.
 
-        def on_log(msg):
-            _emit(self._window, "audiotools:log", {"message": msg})
-
-        def on_phase(msg):
-            _emit(self._window, "audiotools:chapters:phase", {"phase": msg})
-
-        def on_work_info(info):
-            _emit(self._window, "audiotools:chapters:work_info",
-                  {"work_info": info})
-
-        def on_work_info_stream(text):
-            _emit(self._window, "audiotools:chapters:work_info_stream",
-                  {"text": text})
-
-        def on_done(success):
-            _emit(self._window, "audiotools:chapters:done",
-                  {"success": success})
-            if is_remote:
-                self._active_remote_runner = None
-
-        runner.run(
-            input_file=Path(file_path),
-            output_file=Path(output_path),
-            chapters=chapters,
-            raw_publisher_info=raw_publisher_info,
-            base_prompt=base_prompt,
-            glossary=glossary,
-            model=model,
-            n_gpu_layers=n_gpu_layers,
-            n_ctx=n_ctx,
-            temperature=temperature,
-            on_log=on_log,
-            on_phase=on_phase,
-            on_work_info=on_work_info,
-            on_work_info_stream=on_work_info_stream,
-            on_done=on_done,
+        Opciones: ver plan_translate_chapters, más job_id y target (igual que run_translate).
+        """
+        events = JobEvents(
+            lambda event, detail: _emit(self._window, event, detail),
+            tool="translate_chapters",
+            job_id=job_id_from(options),
         )
+        with job_errors(events):
+            opts = ChaptersOptions.from_dict(options)
+            get_chapters_bound = lambda p: get_chapters(config.FFPROBE_BIN, p)
+            plan = resolve_translate_chapters(opts, get_chapters_bound)
 
-    def cancel_translate_chapters(self) -> None:
-        self._chapters_runner.cancel()
-        if self._active_remote_runner is not None:
-            self._active_remote_runner.cancel()
+            if opts.target is not None:
+                from core.translation.remote_backend import RemoteLlamaBackend
+                runner = ChaptersTranslateRunner(backend=RemoteLlamaBackend(opts.target.host, opts.target.port))
+                self._active_remote_runner = runner
+            else:
+                self._whisper.unload()
+                self._unload_all_translation_models(except_="chapters")
+                runner = self._chapters_runner
+
+            def release_remote() -> None:
+                if opts.target is not None:
+                    self._active_remote_runner = None
+
+            def emit(event: str, detail: dict) -> None:
+                _emit(self._window, event, detail)
+
+            try:
+                run_translate_chapters_job(runner, plan, opts, events, emit, on_finished=release_remote)
+            except BaseException:
+                release_remote()
+                raise
+
+    def apply_translated_chapters(self, items: list[dict]) -> dict:
+        """
+        Escribe los capítulos confirmados (y editados, si corresponde) de la vista previa — ver
+        audiotools:chapters:preview_ready. items: [{"path", "chapters": [{"start","end","title"}
+        ...]}], ya filtrados del lado del frontend a solo los capítulos marcados.
+
+        Cada archivo se escribe IN-PLACE (mismo path de siempre, sin copia ni carpeta nueva).
+        Nunca lanza: un archivo que falla se reporta en "errors" y se sigue con el resto.
+        Devuelve {"applied": [...], "errors": [...]}.
+        """
+        return ChaptersAction().apply(config.FFMPEG_BIN, items)
 
     # — Translate: nombres de archivo ——————————————————————————
 
@@ -890,97 +886,47 @@ class AudioToolsAPI:
         """
         return self._filenames_runner.scan(Path(folder))
 
-    def run_translate_filenames_preview(
-        self,
-        files: list[dict],
-        raw_publisher_info: str,
-        base_prompt: str,
-        glossary: str = "",
-        model: str = "",
-        n_gpu_layers: int | None = None,
-        n_ctx: int | None = None,
-        temperature: float | None = None,
-        remote_host: str | None = None,
-        remote_port: int | None = None,
-    ) -> None:
+    def run_translate_filenames_preview(self, options: dict) -> None:
         """
-        Traduce (en background) los nombres marcados como needs_translation
-        en `files` (resultado de scan_filenames_folder). NO renombra nada
-        todavia — emite audiotools:filenames:preview_done con el resultado
-        para que el frontend muestre la vista previa con checkboxes antes
-        de aplicar nada a disco.
+        Traduce los nombres marcados como needs_translation en options["files"] (resultado de
+        scan_filenames_folder). NO renombra nada todavía: termina en
+        audiotools:filenames:preview_ready con el resultado (editable del lado del frontend),
+        para que el usuario confirme antes de que apply_filename_renames toque el disco.
 
-        Si remote_host/remote_port vienen dados, el modelo se carga y
-        corre en el mediador — scan()/apply_renames() (que tocan el disco
-        del cliente) siguen siendo siempre locales.
+        Opciones: ver core.models.FilenamesOptions — files, raw_publisher_info, base_prompt,
+        glossary, model, n_gpu_layers, n_ctx, temperature, target, job_id. target decide dónde
+        corre el modelo; scan_filenames_folder/apply_filename_renames (que tocan el disco del
+        cliente) siguen siendo siempre locales sea cual sea el modo.
         """
-        is_remote = remote_host is not None and remote_port is not None
+        events = JobEvents(
+            lambda event, detail: _emit(self._window, event, detail),
+            tool="translate_filenames",
+            job_id=job_id_from(options),
+        )
+        with job_errors(events):
+            opts = FilenamesOptions.from_dict(options)
 
-        if is_remote:
-            from core.translation.remote_backend import RemoteLlamaBackend
-            runner = FilenameTranslateRunner(backend=RemoteLlamaBackend(remote_host, remote_port))
-            self._active_remote_runner = runner
-        else:
-            self._whisper.unload()
-            self._unload_all_translation_models(except_="filenames")
-            runner = self._filenames_runner
+            if opts.target is not None:
+                from core.translation.remote_backend import RemoteLlamaBackend
+                runner = FilenameTranslateRunner(backend=RemoteLlamaBackend(opts.target.host, opts.target.port))
+                self._active_remote_runner = runner
+            else:
+                self._whisper.unload()
+                self._unload_all_translation_models(except_="filenames")
+                runner = self._filenames_runner
 
-        def on_log(msg):
-            _emit(self._window, "audiotools:log", {"message": msg})
-
-        def on_phase(msg):
-            _emit(self._window, "audiotools:filenames:phase", {"phase": msg})
-
-        def on_work_info(info):
-            _emit(self._window, "audiotools:filenames:work_info",
-                  {"work_info": info})
-
-        def on_work_info_stream(text):
-            _emit(self._window, "audiotools:filenames:work_info_stream",
-                  {"text": text})
-
-        def on_translate_stream(text):
-            _emit(self._window, "audiotools:filenames:translate_stream",
-                  {"text": text})
-
-        import threading
-
-        def worker():
-            try:
-                result = runner.translate_preview(
-                    files=files,
-                    raw_publisher_info=raw_publisher_info,
-                    base_prompt=base_prompt,
-                    glossary=glossary,
-                    model=model,
-                    n_gpu_layers=n_gpu_layers,
-                    n_ctx=n_ctx,
-                    temperature=temperature,
-                    on_log=on_log,
-                    on_phase=on_phase,
-                    on_work_info=on_work_info,
-                    on_work_info_stream=on_work_info_stream,
-                    on_translate_stream=on_translate_stream,
-                )
-                _emit(self._window, "audiotools:filenames:preview_done", {
-                    "success": True, "files": result,
-                })
-            except Exception as exc:
-                _emit(self._window, "audiotools:log",
-                      {"message": f"[error] {exc}"})
-                _emit(self._window, "audiotools:filenames:preview_done", {
-                    "success": False, "files": [],
-                })
-            finally:
-                if is_remote:
+            def release_remote() -> None:
+                if opts.target is not None:
                     self._active_remote_runner = None
 
-        threading.Thread(target=worker, daemon=True).start()
+            def emit(event: str, detail: dict) -> None:
+                _emit(self._window, event, detail)
 
-    def cancel_translate_filenames(self) -> None:
-        self._filenames_runner.cancel()
-        if self._active_remote_runner is not None:
-            self._active_remote_runner.cancel()
+            try:
+                run_translate_filenames_job(runner, opts, events, emit, on_finished=release_remote)
+            except BaseException:
+                release_remote()
+                raise
 
     def apply_filename_renames(self, renames: list[list[str]]) -> dict:
         """

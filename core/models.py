@@ -728,3 +728,174 @@ class TranslateOptions:
             target=target,
             job_id=job_id_from(raw),
         )
+
+
+@dataclass
+class ChaptersOptions:
+    """
+    Opciones de api.run_translate_chapters / api.plan_translate_chapters.
+
+    A diferencia de TranslateOptions (SRT), correr este job NO escribe nada en disco: solo
+    traduce los títulos de los capítulos de cada archivo y arma una vista previa editable. Lo
+    que se termina escribiendo (y recién ahí, en los archivos originales, sin copia ni carpeta
+    nueva) lo decide api.apply_translated_chapters, después de que el usuario confirma o edita
+    esa vista previa. Por eso acá no hay output_subfolder ni nada de rutas de salida — ver
+    core/translation/chapters_action.py para la forma de la vista previa en sí.
+
+    file_paths          archivos de video/audio con capítulos embebidos (mínimo 1); se traducen
+                        en fila, con UN work_info generado para todos (se asume que pertenecen
+                        a la misma obra — misma idea que title/work_info en TranslateOptions)
+    raw_publisher_info    ficha/descripción del publisher (opcional); genera el work_info
+    base_prompt          prompt de traducción
+    glossary             glosario fijo del idioma
+    model / n_gpu_layers / n_ctx / temperature     igual que TranslateOptions
+    target                igual que TranslateOptions
+    job_id
+    """
+
+    file_paths: list[str]
+    raw_publisher_info: str = ""
+    base_prompt: str = ""
+    glossary: str = ""
+    model: str = ""
+    n_gpu_layers: int = 20
+    n_ctx: int = 4096
+    temperature: float = 0.3
+    target: RemoteTarget | None = None
+    job_id: str | None = None
+
+    _REQUIRED = ("file_paths",)
+
+    @classmethod
+    def from_dict(cls, raw) -> "ChaptersOptions":
+        if not isinstance(raw, dict):
+            raise ValueError("Las opciones deben ser un objeto.")
+
+        known = {f.name for f in fields(cls)}
+        unknown = sorted(set(raw) - known)
+        if unknown:
+            raise ValueError("Opciones desconocidas: " + ", ".join(unknown))
+        missing = [k for k in cls._REQUIRED if k not in raw]
+        if missing:
+            raise ValueError("Faltan opciones: " + ", ".join(missing))
+
+        paths = raw["file_paths"]
+        if not isinstance(paths, list) or not all(isinstance(p, str) and p.strip() for p in paths):
+            raise ValueError("La opción «file_paths» debe ser una lista de rutas.")
+        if not paths:
+            raise ValueError("Selecciona al menos un archivo.")
+
+        target = parse_target(raw.get("target"))
+
+        model = raw.get("model", "")
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError("Selecciona un modelo.")
+
+        n_gpu_layers = _whole_number(raw, "n_gpu_layers", 20)
+        n_ctx = _whole_number(raw, "n_ctx", 4096)
+
+        temperature = raw.get("temperature", 0.3)
+        if not _is_number(temperature):
+            raise ValueError("La opción «temperature» debe ser un número.")
+
+        for key in ("raw_publisher_info", "base_prompt", "glossary"):
+            value = raw.get(key, "")
+            if not isinstance(value, str):
+                raise ValueError(f"La opción «{key}» debe ser un texto.")
+
+        if raw.get("job_id") is not None and job_id_from(raw) is None:
+            raise ValueError("La opción «job_id» no es válida.")
+
+        return cls(
+            file_paths=list(paths),
+            raw_publisher_info=raw.get("raw_publisher_info", ""),
+            base_prompt=raw.get("base_prompt", ""),
+            glossary=raw.get("glossary", ""),
+            model=model.strip(),
+            n_gpu_layers=n_gpu_layers,
+            n_ctx=n_ctx,
+            temperature=float(temperature),
+            target=target,
+            job_id=job_id_from(raw),
+        )
+
+
+@dataclass
+class FilenamesOptions:
+    """
+    Opciones de api.run_translate_filenames_preview. Igual que ChaptersOptions: correr esto NO
+    renombra nada — arma una vista previa (nombres traducidos, editables) para que el usuario
+    confirme o edite antes de que api.apply_filename_renames renombre de verdad.
+
+    files              resultado de scan_filenames_folder (ya con needs_translation resuelto —
+                       la detección de idioma no usa IA y es instantánea, así que no hace falta
+                       volver a escanear acá; solo se valida la forma mínima)
+    raw_publisher_info / base_prompt / glossary / model / n_gpu_layers / n_ctx / temperature /
+    target / job_id     igual que ChaptersOptions
+    """
+
+    files: list[dict]
+    raw_publisher_info: str = ""
+    base_prompt: str = ""
+    glossary: str = ""
+    model: str = ""
+    n_gpu_layers: int = 20
+    n_ctx: int = 4096
+    temperature: float = 0.3
+    target: RemoteTarget | None = None
+    job_id: str | None = None
+
+    _REQUIRED = ("files",)
+
+    @classmethod
+    def from_dict(cls, raw) -> "FilenamesOptions":
+        if not isinstance(raw, dict):
+            raise ValueError("Las opciones deben ser un objeto.")
+
+        known = {f.name for f in fields(cls)}
+        unknown = sorted(set(raw) - known)
+        if unknown:
+            raise ValueError("Opciones desconocidas: " + ", ".join(unknown))
+        missing = [k for k in cls._REQUIRED if k not in raw]
+        if missing:
+            raise ValueError("Faltan opciones: " + ", ".join(missing))
+
+        files = raw["files"]
+        if not isinstance(files, list) or not all(isinstance(f, dict) and isinstance(f.get("path"), str) for f in files):
+            raise ValueError("La opción «files» debe ser una lista de resultados de scan_filenames_folder.")
+        if not files:
+            raise ValueError("No hay archivos para traducir — escaneá una carpeta primero.")
+
+        target = parse_target(raw.get("target"))
+
+        model = raw.get("model", "")
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError("Selecciona un modelo.")
+
+        n_gpu_layers = _whole_number(raw, "n_gpu_layers", 20)
+        n_ctx = _whole_number(raw, "n_ctx", 4096)
+
+        temperature = raw.get("temperature", 0.3)
+        if not _is_number(temperature):
+            raise ValueError("La opción «temperature» debe ser un número.")
+
+        for key in ("raw_publisher_info", "base_prompt", "glossary"):
+            value = raw.get(key, "")
+            if not isinstance(value, str):
+                raise ValueError(f"La opción «{key}» debe ser un texto.")
+
+        if raw.get("job_id") is not None and job_id_from(raw) is None:
+            raise ValueError("La opción «job_id» no es válida.")
+
+        return cls(
+            files=list(files),
+            raw_publisher_info=raw.get("raw_publisher_info", ""),
+            base_prompt=raw.get("base_prompt", ""),
+            glossary=raw.get("glossary", ""),
+            model=model.strip(),
+            n_gpu_layers=n_gpu_layers,
+            n_ctx=n_ctx,
+            temperature=float(temperature),
+            target=target,
+            job_id=job_id_from(raw),
+        )
