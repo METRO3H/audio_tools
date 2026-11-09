@@ -1,6 +1,6 @@
 """
 Translate Filenames: ejecución del job. Igual que Chapters, NO escribe nada en disco — termina
-en audiotools:filenames:preview_ready. apply_filename_renames (el que sí escribe) ya tenía sus
+en audiotools:translation:preview_ready. apply_filename_renames (el que sí escribe) ya tenía sus
 propios tests de antes (no los toqué: su firma no cambió).
 """
 import threading
@@ -95,7 +95,7 @@ def test_start_carries_the_total_and_the_job_id():
 
 def test_preview_ready_has_the_translated_name_and_leaves_what_did_not_need_it_untouched():
     _, cap = run_job()
-    preview = cap.of("audiotools:filenames:preview_ready")
+    preview = cap.of("audiotools:translation:preview_ready")
     assert len(preview) == 1 and preview[0]["job_id"] == "job-1"
     rows = {f["name"]: f for f in preview[0]["files"]}
     assert rows["a"]["translated_name"] == "Translated"
@@ -105,7 +105,7 @@ def test_preview_ready_has_the_translated_name_and_leaves_what_did_not_need_it_u
 def test_preview_ready_fires_before_done():
     _, cap = run_job()
     names = cap.names()
-    assert names.index("audiotools:filenames:preview_ready") < names.index("audiotools:done")
+    assert names.index("audiotools:translation:preview_ready") < names.index("audiotools:done")
 
 
 def test_done_reports_success():
@@ -142,7 +142,7 @@ def test_cancelling_is_reported_as_cancelled_with_no_preview():
 
     done = cap.of("audiotools:done")[0]
     assert done["success"] is False and done["cancelled"] is True
-    assert cap.of("audiotools:filenames:preview_ready") == []
+    assert cap.of("audiotools:translation:preview_ready") == []
 
 
 def test_a_backend_failure_is_reported_as_an_error_not_an_exception():
@@ -153,4 +153,4 @@ def test_a_backend_failure_is_reported_as_an_error_not_an_exception():
     _, cap = run_job(backend=BrokenBackend())
     done = cap.of("audiotools:done")[0]
     assert done["success"] is False and "no VRAM" in done["error"]
-    assert cap.of("audiotools:filenames:preview_ready") == []
+    assert cap.of("audiotools:translation:preview_ready") == []

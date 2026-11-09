@@ -55,7 +55,7 @@
    let settings = $state(undefined); // lo llena TranslationSettings (bind:settings)
 
    // Vista previa: null mientras se traduce; {files:[...]} apenas llega
-   // audiotools:chapters:preview_ready, ANTES de que llegue el audiotools:done del job (ver
+   // audiotools:translation:preview_ready, ANTES de que llegue el audiotools:done del job (ver
    // core/translation/job.py). No se usa progress.success para decidir qué mostrar durante
    // job.processing: previewData es justo esa señal.
    let previewData = $state(null);
@@ -63,8 +63,8 @@
    function onPreviewReady(e) {
       previewData = e.detail;
    }
-   window.addEventListener("audiotools:chapters:preview_ready", onPreviewReady);
-   $effect(() => () => window.removeEventListener("audiotools:chapters:preview_ready", onPreviewReady));
+   window.addEventListener("audiotools:translation:preview_ready", onPreviewReady);
+   $effect(() => () => window.removeEventListener("audiotools:translation:preview_ready", onPreviewReady));
 
    function backToForm() {
       previewData = null;

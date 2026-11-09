@@ -13,10 +13,10 @@ Convención de eventos JS:
     audiotools:progress          { detail: { value: float } }
     audiotools:file              { detail: { index: int, done: bool, started_at?: float, elapsed?: float, job_id?: str } }
     audiotools:done              { detail: { success: bool, elapsed?: float, cancelled?: bool, error?: str } }
-    audiotools:translate:stats   { detail: { run_id: int|null, ...RunStats } } — una vez, al terminar
-    audiotools:translate:block_stream  { detail: { file_index: int, text: str } }
-    audiotools:translate:block_input   { detail: { file_index: int, text: str } }
-    audiotools:translate:system_prompt { detail: { text: str, sections: {base_prompt, glossary, work_info, title} } }
+    audiotools:translation:stats   { detail: { run_id: int|null, ...RunStats } } — una vez, al terminar
+    audiotools:translation:block_stream  { detail: { file_index: int, text: str } }
+    audiotools:translation:block_input   { detail: { file_index: int, text: str } }
+    audiotools:translation:system_prompt { detail: { text: str, sections: {base_prompt, glossary, work_info, title} } }
 
 Las tools migradas al contrato de core/jobs.py (hoy: merge, diverge,
 audio_to_video, transcribe, translate —.srt—) reciben un objeto de opciones
@@ -764,7 +764,7 @@ class AudioToolsAPI:
         se generan una sola vez para toda la corrida). Salida en
         {base_folder}/transcriptions/{output_subfolder}. Retorna de inmediato: el avance llega
         por los eventos audiotools:start/log/progress/done (todos con job_id) y, además, los
-        audiotools:translate:* propios (ver core/translation/job.py). Cualquier error antes de
+        audiotools:translation:* propios (ver core/translation/job.py). Cualquier error antes de
         arrancar el hilo llega como audiotools:done con success=false y error, nunca como
         excepción.
 
@@ -828,7 +828,7 @@ class AudioToolsAPI:
         """
         Traduce los títulos de los capítulos de una cola de archivos — NO escribe nada en disco
         (ver el docstring de core.models.ChaptersOptions): termina en
-        audiotools:chapters:preview_ready con los títulos traducidos de toda la cola, para que
+        audiotools:translation:preview_ready con los títulos traducidos de toda la cola, para que
         el usuario confirme o edite antes de llamar a apply_translated_chapters.
 
         Opciones: ver plan_translate_chapters, más job_id y target (igual que run_translate).
@@ -868,7 +868,7 @@ class AudioToolsAPI:
     def apply_translated_chapters(self, items: list[dict]) -> dict:
         """
         Escribe los capítulos confirmados (y editados, si corresponde) de la vista previa — ver
-        audiotools:chapters:preview_ready. items: [{"path", "chapters": [{"start","end","title"}
+        audiotools:translation:preview_ready. items: [{"path", "chapters": [{"start","end","title"}
         ...]}], ya filtrados del lado del frontend a solo los capítulos marcados.
 
         Cada archivo se escribe IN-PLACE (mismo path de siempre, sin copia ni carpeta nueva).
@@ -890,7 +890,7 @@ class AudioToolsAPI:
         """
         Traduce los nombres marcados como needs_translation en options["files"] (resultado de
         scan_filenames_folder). NO renombra nada todavía: termina en
-        audiotools:filenames:preview_ready con el resultado (editable del lado del frontend),
+        audiotools:translation:preview_ready con el resultado (editable del lado del frontend),
         para que el usuario confirme antes de que apply_filename_renames toque el disco.
 
         Opciones: ver core.models.FilenamesOptions — files, raw_publisher_info, base_prompt,

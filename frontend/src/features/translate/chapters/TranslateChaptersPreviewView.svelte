@@ -21,7 +21,7 @@
 
    // Copia editable local: {path, name, chapters: [{index,start,end,original_title,title,checked}]}
    // — "title" es lo que se termina mandando (arranca igual al traducido, editable a mano).
-   // files es la foto del momento en que llegó la vista previa (ver audiotools:chapters:
+   // files es la foto del momento en que llegó la vista previa (ver audiotools:translation:
    // preview_ready): un snapshot a copiar una sola vez al montar, no algo para seguir
    // reactivamente — de ahí el untrack(), igual que storageKey en TranslationSettings.
    let rows = $state(

@@ -88,7 +88,7 @@
    }
 
    // Vista previa: null mientras se traduce; {files:[...]} apenas llega
-   // audiotools:filenames:preview_ready, ANTES del audiotools:done del job (ver
+   // audiotools:translation:preview_ready, ANTES del audiotools:done del job (ver
    // core/translation/job.py::run_translate_filenames_job) — mismo patrón que Chapters.
    let previewData = $state(null);
    // Copia editable: cada fila de previewData.files + {checked, title} — "title" es lo que se
@@ -107,18 +107,25 @@
    function onWorkInfoStream(e) {
       workInfoText = e.detail.text;
    }
-   function onTranslateStream(e) {
+   // El stream trae el texto crudo del modelo (con <think> y espacios); el final es el que el
+   // runner realmente usa en el prompt, ya limpio. Igual que SRT, el final reemplaza al stream.
+   function onWorkInfoFinal(e) {
+      workInfoText = e.detail.work_info;
+   }
+   function onNameStream(e) {
       translateStreamText = e.detail.text;
    }
-   window.addEventListener("audiotools:filenames:preview_ready", onPreviewReady);
-   window.addEventListener("audiotools:filenames:phase", onPhase);
-   window.addEventListener("audiotools:filenames:work_info_stream", onWorkInfoStream);
-   window.addEventListener("audiotools:filenames:translate_stream", onTranslateStream);
+   window.addEventListener("audiotools:translation:preview_ready", onPreviewReady);
+   window.addEventListener("audiotools:translation:phase", onPhase);
+   window.addEventListener("audiotools:translation:work_info_stream", onWorkInfoStream);
+   window.addEventListener("audiotools:translation:work_info", onWorkInfoFinal);
+   window.addEventListener("audiotools:translation:name_stream", onNameStream);
    $effect(() => () => {
-      window.removeEventListener("audiotools:filenames:preview_ready", onPreviewReady);
-      window.removeEventListener("audiotools:filenames:phase", onPhase);
-      window.removeEventListener("audiotools:filenames:work_info_stream", onWorkInfoStream);
-      window.removeEventListener("audiotools:filenames:translate_stream", onTranslateStream);
+      window.removeEventListener("audiotools:translation:preview_ready", onPreviewReady);
+      window.removeEventListener("audiotools:translation:phase", onPhase);
+      window.removeEventListener("audiotools:translation:work_info_stream", onWorkInfoStream);
+      window.removeEventListener("audiotools:translation:work_info", onWorkInfoFinal);
+      window.removeEventListener("audiotools:translation:name_stream", onNameStream);
    });
 
    function backToForm() {

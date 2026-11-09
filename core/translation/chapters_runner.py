@@ -76,7 +76,7 @@ class ChaptersTranslateRunner(BaseTranslationRunner):
 
         total = len(files)
         # (path, [{index, start, end, original_title, translated_title}]) por archivo ya
-        # traducido — es lo que termina en audiotools:chapters:preview_ready.
+        # traducido — es lo que termina en audiotools:translation:preview_ready.
         results: list[tuple[Path, list[dict]]] = []
 
         try:

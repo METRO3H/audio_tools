@@ -13,33 +13,37 @@ TranslateRunner.run_queue tiene muchos más callbacks que WhisperRunner.run_sequ
 core/translation/runner.py): además de start/log/progress/done (el contrato genérico) y
 `audiotools:file` (igual que Transcribe), expone el detalle propio del pipeline de traducción
 — fases, work_info/título en vivo, progreso por línea, la salida cruda de cada llamada al
-modelo y las estadísticas de la corrida. Esos quedan en eventos `audiotools:translate:*`
-propios, con el mismo nombre que ya tenían antes del contrato (no se tocan en este commit; la
-unificación de las familias de eventos de las 3 tools de traducción se deja para el cierre de
-las 3, ver HANDOFF sección 8):
+modelo y las estadísticas de la corrida. Esos van en la familia `audiotools:translation:*`,
+compartida por las 3 tools de traducción (paso 3.2 del traspaso: núcleo común phase /
+work_info / work_info_stream / preview_ready, más extensiones por tool). Eventos de SRT:
 
-    audiotools:translate:queue_started     { started_at }
-    audiotools:translate:phase             { phase }
-    audiotools:translate:step              { step, status }
-    audiotools:translate:title             { title }
-    audiotools:translate:work_info         { work_info }
-    audiotools:translate:work_info_stream  { text }
-    audiotools:translate:title_stream      { text }
-    audiotools:translate:lines             { file_index, lines_done_file, lines_total_file,
+    audiotools:translation:queue_started     { started_at }
+    audiotools:translation:phase             { phase }
+    audiotools:translation:step              { step, status }
+    audiotools:translation:title             { title }
+    audiotools:translation:work_info         { work_info }
+    audiotools:translation:work_info_stream  { text }
+    audiotools:translation:title_stream      { text }
+    audiotools:translation:lines             { file_index, lines_done_file, lines_total_file,
                                               lines_done_global, lines_total_global }
-    audiotools:translate:block_stream      { file_index, text }
-    audiotools:translate:block_input       { file_index, text }
-    audiotools:translate:system_prompt     { text, sections }
-    audiotools:translate:stats             { run_id, ...RunStats }
+    audiotools:translation:block_stream      { file_index, text }
+    audiotools:translation:block_input       { file_index, text }
+    audiotools:translation:system_prompt     { text, sections }
+    audiotools:translation:stats             { run_id, ...RunStats }
 
-Chapters (ver run_translate_chapters_job) y Filenames (ver run_translate_filenames_job) tienen
-cada uno su propia familia de eventos (audiotools:chapters:*, audiotools:filenames:*), análoga
-pero más chica — ninguna tiene concepto de título de la obra, y ninguna escribe nada en disco:
-las dos terminan en un evento *:preview_ready con lo traducido, para que el usuario confirme o
-edite (ver ChaptersAction.apply / api.apply_filename_renames) antes de que algo se escriba de
-verdad. Esto cierra las 3 tools de traducción migradas al contrato; la unificación de las 3
-familias de eventos en una sola (mencionada como pendiente más arriba) queda afuera de este
-commit — ver el resumen de entrega para el porqué.
+Chapters (ver run_translate_chapters_job) y Filenames (ver run_translate_filenames_job) usan
+el mismo núcleo común (phase, work_info, work_info_stream, preview_ready) más una extensión
+propia cada una — ninguna tiene concepto de título de la obra, y ninguna escribe nada en disco:
+las dos terminan en `audiotools:translation:preview_ready` con lo traducido, para que el
+usuario confirme o edite (ver ChaptersAction.apply / api.apply_filename_renames) antes de que
+algo se escriba de verdad:
+
+    audiotools:translation:file_titles       { file_index, chapters }   solo Chapters
+    audiotools:translation:name_stream       { text }                   solo Filenames
+    audiotools:translation:preview_ready     { job_id, files }          Chapters y Filenames
+
+Como el nombre es compartido, un listener en una vista no garantiza que otra lo use (ver
+tests/test_translation_event_sync.py).
 """
 
 from __future__ import annotations
@@ -78,33 +82,33 @@ def run_translate_chapters_job(
 ) -> None:
     """
     Arranca runner.translate_queue (en su propio hilo). A diferencia de run_translate_job (SRT),
-    esto NO escribe nada en disco: termina en audiotools:chapters:preview_ready con los títulos
+    esto NO escribe nada en disco: termina en audiotools:translation:preview_ready con los títulos
     traducidos de toda la cola, para que el usuario confirme o edite antes de que
     api.apply_translated_chapters (ChaptersAction.apply) escriba de verdad — ver el docstring de
     ChaptersOptions para el porqué de este diseño.
 
     `done` llega igual que en Transcribe/SRT (success/cancelled/error), pero acá success=true
     significa "la cola terminó de traducir", no "ya quedó escrito" — eso es
-    audiotools:chapters:preview_ready, que llega junto (ver on_queue_done más abajo: emite los
+    audiotools:translation:preview_ready, que llega junto (ver on_queue_done más abajo: emite los
     dos, preview_ready primero).
     """
     total = len(plan.files)
     events.start(total)
 
     def on_phase(msg: str) -> None:
-        emit("audiotools:chapters:phase", {"phase": msg})
+        emit("audiotools:translation:phase", {"phase": msg})
 
     def on_work_info(info: str) -> None:
-        emit("audiotools:chapters:work_info", {"work_info": info})
+        emit("audiotools:translation:work_info", {"work_info": info})
 
     def on_work_info_stream(text: str) -> None:
-        emit("audiotools:chapters:work_info_stream", {"text": text})
+        emit("audiotools:translation:work_info_stream", {"text": text})
 
     def on_file_start(idx: int, total_: int, name: str, started_at: float) -> None:
         emit("audiotools:file", {"job_id": events.job_id, "index": idx, "done": False, "started_at": started_at})
 
     def on_file_titles(idx: int, rows: list[dict]) -> None:
-        emit("audiotools:chapters:file_titles", {"file_index": idx, "chapters": rows})
+        emit("audiotools:translation:file_titles", {"file_index": idx, "chapters": rows})
 
     def on_file_done(idx: int, success: bool, elapsed: float) -> None:
         emit("audiotools:file", {"job_id": events.job_id, "index": idx, "done": True, "elapsed": elapsed})
@@ -115,7 +119,7 @@ def run_translate_chapters_job(
     def on_queue_done(succeeded: int, queue_total: int, cancelled: bool, results: list) -> None:
         success = succeeded > 0 and not cancelled
         if success:
-            emit("audiotools:chapters:preview_ready", {
+            emit("audiotools:translation:preview_ready", {
                 "job_id": events.job_id,
                 "files": [
                     {"path": str(path), "name": path.name, "chapters": rows}
@@ -172,7 +176,7 @@ def run_translate_job(
 ) -> None:
     """
     Emite `start` y arranca `runner.run_queue` (en su propio hilo, ver TranslateRunner). Retorna
-    de inmediato; `log`/`progress`/`done` (y los `audiotools:translate:*` de arriba) llegan
+    de inmediato; `log`/`progress`/`done` (y los `audiotools:translation:*` de arriba) llegan
     después.
 
     `on_finished` se llama tras el `done` (para soltar lo que api.py retenga del runner remoto,
@@ -188,25 +192,25 @@ def run_translate_job(
     total = len(plan.files)
     queue_started_at = time.time()
     events.start(total)
-    emit("audiotools:translate:queue_started", {"started_at": queue_started_at})
+    emit("audiotools:translation:queue_started", {"started_at": queue_started_at})
 
     def on_phase(msg: str) -> None:
-        emit("audiotools:translate:phase", {"phase": msg})
+        emit("audiotools:translation:phase", {"phase": msg})
 
     def on_step(step: str, status: str) -> None:
-        emit("audiotools:translate:step", {"step": step, "status": status})
+        emit("audiotools:translation:step", {"step": step, "status": status})
 
     def on_title(title: str) -> None:
-        emit("audiotools:translate:title", {"title": title})
+        emit("audiotools:translation:title", {"title": title})
 
     def on_work_info(info: str) -> None:
-        emit("audiotools:translate:work_info", {"work_info": info})
+        emit("audiotools:translation:work_info", {"work_info": info})
 
     def on_work_info_stream(text: str) -> None:
-        emit("audiotools:translate:work_info_stream", {"text": text})
+        emit("audiotools:translation:work_info_stream", {"text": text})
 
     def on_title_stream(text: str) -> None:
-        emit("audiotools:translate:title_stream", {"text": text})
+        emit("audiotools:translation:title_stream", {"text": text})
 
     def on_lines_progress(
         file_index: int,
@@ -215,7 +219,7 @@ def run_translate_job(
         lines_done_global: int,
         lines_total_global: int,
     ) -> None:
-        emit("audiotools:translate:lines", {
+        emit("audiotools:translation:lines", {
             "file_index": file_index,
             "lines_done_file": lines_done_file,
             "lines_total_file": lines_total_file,
@@ -239,16 +243,16 @@ def run_translate_job(
             on_finished()
 
     def on_block_stream(file_index: int, text: str) -> None:
-        emit("audiotools:translate:block_stream", {"file_index": file_index, "text": text})
+        emit("audiotools:translation:block_stream", {"file_index": file_index, "text": text})
 
     def on_block_input(file_index: int, text: str) -> None:
-        emit("audiotools:translate:block_input", {"file_index": file_index, "text": text})
+        emit("audiotools:translation:block_input", {"file_index": file_index, "text": text})
 
     def on_system_prompt(text: str, sections: dict) -> None:
-        emit("audiotools:translate:system_prompt", {"text": text, "sections": sections})
+        emit("audiotools:translation:system_prompt", {"text": text, "sections": sections})
 
     def on_stats(run_id: int | None, stats: dict) -> None:
-        emit("audiotools:translate:stats", {"run_id": run_id, **stats})
+        emit("audiotools:translation:stats", {"run_id": run_id, **stats})
 
     runner.run_queue(
         files=[(item.path, item.output) for item in plan.files],
@@ -298,7 +302,7 @@ def run_translate_filenames_job(
     scan_filenames_folder, que el frontend llama aparte — esa detección de idioma no usa IA y es
     instantánea, así que no se repite acá).
 
-    NO escribe nada en disco: termina en audiotools:filenames:preview_ready con los nombres
+    NO escribe nada en disco: termina en audiotools:translation:preview_ready con los nombres
     traducidos (editables del lado del frontend), para que el usuario confirme antes de que
     api.apply_filename_renames renombre de verdad. Si se cancela a mitad de camino, runner.
     cancelled lo distingue de un éxito real (ver el docstring de esa property: translate_preview
@@ -307,16 +311,16 @@ def run_translate_filenames_job(
     events.start(len(opts.files))
 
     def on_phase(msg: str) -> None:
-        emit("audiotools:filenames:phase", {"phase": msg})
+        emit("audiotools:translation:phase", {"phase": msg})
 
     def on_work_info(info: str) -> None:
-        emit("audiotools:filenames:work_info", {"work_info": info})
+        emit("audiotools:translation:work_info", {"work_info": info})
 
     def on_work_info_stream(text: str) -> None:
-        emit("audiotools:filenames:work_info_stream", {"text": text})
+        emit("audiotools:translation:work_info_stream", {"text": text})
 
     def on_translate_stream(text: str) -> None:
-        emit("audiotools:filenames:translate_stream", {"text": text})
+        emit("audiotools:translation:name_stream", {"text": text})
 
     def worker() -> None:
         try:
@@ -338,7 +342,7 @@ def run_translate_filenames_job(
             if runner.cancelled:
                 events.done(False, cancelled=True)
             else:
-                emit("audiotools:filenames:preview_ready", {"job_id": events.job_id, "files": result})
+                emit("audiotools:translation:preview_ready", {"job_id": events.job_id, "files": result})
                 events.done(True)
         except Exception as exc:
             message = describe_error(exc)

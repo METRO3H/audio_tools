@@ -1,6 +1,6 @@
 """
 Translate Chapters: resolve, plan y ejecución del job. A diferencia de Translate SRT, acá NO se
-escribe nada en disco — el job termina en audiotools:chapters:preview_ready con los títulos
+escribe nada en disco — el job termina en audiotools:translation:preview_ready con los títulos
 traducidos, no con archivos escritos. Eso es ChaptersAction.apply, que se prueba aparte (ver
 tests/test_chapters_metadata.py para el "subprocess simulado" de embed_chapters, y el final de
 este archivo para apply() en sí).
@@ -164,7 +164,7 @@ def test_start_carries_the_total_and_the_job_id(tmp_path):
 
 def test_preview_ready_has_every_file_with_original_and_translated_titles(tmp_path):
     _, cap, _, files = run_job(tmp_path, names=("a.mp4", "b.mp4"))
-    preview = cap.of("audiotools:chapters:preview_ready")
+    preview = cap.of("audiotools:translation:preview_ready")
     assert len(preview) == 1
     assert preview[0]["job_id"] == "job-1"
     out_files = preview[0]["files"]
@@ -178,7 +178,7 @@ def test_preview_ready_has_every_file_with_original_and_translated_titles(tmp_pa
 def test_preview_ready_fires_before_done(tmp_path):
     _, cap, _, _ = run_job(tmp_path)
     names = cap.names()
-    assert names.index("audiotools:chapters:preview_ready") < names.index("audiotools:done")
+    assert names.index("audiotools:translation:preview_ready") < names.index("audiotools:done")
 
 
 def test_done_reports_success(tmp_path):
@@ -255,7 +255,7 @@ def test_cancelling_mid_queue_is_reported_as_cancelled_with_no_preview(tmp_path)
 
     done = cap.of("audiotools:done")[0]
     assert done["success"] is False and done["cancelled"] is True
-    assert cap.of("audiotools:chapters:preview_ready") == []
+    assert cap.of("audiotools:translation:preview_ready") == []
 
 
 # ── ChaptersAction.apply ──────────────────────────────────────────────────

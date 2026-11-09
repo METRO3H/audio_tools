@@ -21,7 +21,7 @@
    let phaseText = $state("Iniciando...");
    let workInfoText = $state("");
    // file_index -> [{index, start, end, original_title, translated_title}], a medida que cada
-   // archivo termina (ver audiotools:chapters:file_titles) — se muestran apenas llegan, no hay
+   // archivo termina (ver audiotools:translation:file_titles) — se muestran apenas llegan, no hay
    // que esperar a la vista previa para ver algo.
    let fileTitles = $state({});
 
@@ -31,17 +31,24 @@
    function onWorkInfoStream(e) {
       workInfoText = e.detail.text;
    }
+   // El stream trae el texto crudo del modelo (con <think> y espacios); el final es el que el
+   // runner realmente usa en el prompt, ya limpio. Igual que SRT, el final reemplaza al stream.
+   function onWorkInfoFinal(e) {
+      workInfoText = e.detail.work_info;
+   }
    function onFileTitles(e) {
       fileTitles = { ...fileTitles, [e.detail.file_index]: e.detail.chapters };
    }
 
-   window.addEventListener("audiotools:chapters:phase", onPhase);
-   window.addEventListener("audiotools:chapters:work_info_stream", onWorkInfoStream);
-   window.addEventListener("audiotools:chapters:file_titles", onFileTitles);
+   window.addEventListener("audiotools:translation:phase", onPhase);
+   window.addEventListener("audiotools:translation:work_info_stream", onWorkInfoStream);
+   window.addEventListener("audiotools:translation:work_info", onWorkInfoFinal);
+   window.addEventListener("audiotools:translation:file_titles", onFileTitles);
    $effect(() => () => {
-      window.removeEventListener("audiotools:chapters:phase", onPhase);
-      window.removeEventListener("audiotools:chapters:work_info_stream", onWorkInfoStream);
-      window.removeEventListener("audiotools:chapters:file_titles", onFileTitles);
+      window.removeEventListener("audiotools:translation:phase", onPhase);
+      window.removeEventListener("audiotools:translation:work_info_stream", onWorkInfoStream);
+      window.removeEventListener("audiotools:translation:work_info", onWorkInfoFinal);
+      window.removeEventListener("audiotools:translation:file_titles", onFileTitles);
    });
 
    // Igual que TranslateProcessingView (SRT), pero más simple: acá no hay progreso fino por

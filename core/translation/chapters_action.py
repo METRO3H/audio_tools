@@ -63,7 +63,7 @@ class ChaptersAction:
     def apply(self, ffmpeg_bin, items: list[dict]) -> dict:
         """
         Escribe los capítulos confirmados (y editados, si corresponde) de la vista previa —
-        ver audiotools:chapters:preview_ready. items: [{"path": str, "chapters": [{"start",
+        ver audiotools:translation:preview_ready. items: [{"path": str, "chapters": [{"start",
         "end", "title"}, ...]}], ya filtrados del lado del frontend a solo los capítulos que el
         usuario dejó marcados (los no marcados no entran acá, así que conservan su título
         original tal cual estaban).

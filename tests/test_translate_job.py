@@ -166,13 +166,13 @@ class Capture:
 def wait_for_stats(cap):
     """
     Espera a que termine el job, sondeando (TranslateRunner no expone un Event propio). El
-    último evento es `audiotools:translate:stats`, NO `audiotools:done`: TranslateRunner lo
+    último evento es `audiotools:translation:stats`, NO `audiotools:done`: TranslateRunner lo
     emite en el `finally` de _queue_worker, después de `on_queue_done` (ver core/translation/
     runner.py) — así que esperar por `done` es una carrera que casi siempre se pierde (stats
     llega una instrucción después, en el mismo hilo, sin punto de espera entre medio).
     """
     for _ in range(200):
-        if cap.names() and cap.names()[-1] == "audiotools:translate:stats":
+        if cap.names() and cap.names()[-1] == "audiotools:translation:stats":
             return
         threading.Event().wait(0.05)
     pytest.fail("el job no terminó a tiempo")
@@ -204,7 +204,7 @@ def test_a_whole_job_writes_every_file_and_reports_the_contract(tmp_path):
     runner, cap, plan = run_job(tmp_path, names=("a.srt", "b.srt"))
     assert all(f.output.exists() for f in plan.files)
     names = cap.names()
-    assert names[0] == "audiotools:start" and names[-1] == "audiotools:translate:stats"
+    assert names[0] == "audiotools:start" and names[-1] == "audiotools:translation:stats"
     done = cap.of("audiotools:done")[0]
     assert done["job_id"] == "job-1" and done["tool"] == "translate"
     assert done["success"] is True and done["cancelled"] is False
@@ -228,13 +228,13 @@ def test_progress_is_emitted_per_file(tmp_path):
 
 def test_system_prompt_sections_reach_the_contract_event(tmp_path):
     _, cap, _ = run_job(tmp_path, base_prompt="Translate to English.", glossary="x -> y")
-    sections = cap.of("audiotools:translate:system_prompt")[0]["sections"]
+    sections = cap.of("audiotools:translation:system_prompt")[0]["sections"]
     assert sections["base_prompt"] == "Translate to English." and sections["glossary"] == "x -> y"
 
 
 def test_stats_are_emitted_once_with_the_run_id(tmp_path):
     _, cap, _ = run_job(tmp_path)
-    stats = cap.of("audiotools:translate:stats")
+    stats = cap.of("audiotools:translation:stats")
     assert len(stats) == 1
     assert stats[0]["total_files"] == 1
 

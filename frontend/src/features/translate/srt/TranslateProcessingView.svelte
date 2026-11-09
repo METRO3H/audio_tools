@@ -189,7 +189,7 @@
    let promptViewMode = $state('formatted'); // 'formatted' | 'raw'
    let promptTab = $state('instructions'); // tabs verticales: instructions, glossary, workInfo, title, context, block
 
-   // Las secciones llegan ya separadas del backend (audiotools:translate:system_prompt ·
+   // Las secciones llegan ya separadas del backend (audiotools:translation:system_prompt ·
    // sections): antes se reparseaba `systemPrompt` acá con una regex que buscaba literalmente
    // "[Work info]" y nunca coincidía con el texto real que arma build_system_prompt
    // ("[Work info — persistent context for this work]"), así que la sección Glossary se
@@ -299,30 +299,30 @@
    }
 
    // --- Listeners ---
-   window.addEventListener("audiotools:translate:step", onStepEvent);
-   window.addEventListener("audiotools:translate:work_info_stream", onWorkInfoStream);
-   window.addEventListener("audiotools:translate:title_stream", onTitleStream);
-   window.addEventListener("audiotools:translate:work_info", onWorkInfoFinal);
-   window.addEventListener("audiotools:translate:title", onTitleFinal);
-   window.addEventListener("audiotools:translate:lines", onLinesProgress);
-   window.addEventListener("audiotools:translate:queue_started", onQueueStarted);
+   window.addEventListener("audiotools:translation:step", onStepEvent);
+   window.addEventListener("audiotools:translation:work_info_stream", onWorkInfoStream);
+   window.addEventListener("audiotools:translation:title_stream", onTitleStream);
+   window.addEventListener("audiotools:translation:work_info", onWorkInfoFinal);
+   window.addEventListener("audiotools:translation:title", onTitleFinal);
+   window.addEventListener("audiotools:translation:lines", onLinesProgress);
+   window.addEventListener("audiotools:translation:queue_started", onQueueStarted);
    window.addEventListener("audiotools:file", onFileTiming);
-   window.addEventListener("audiotools:translate:block_stream", onBlockStream);
-   window.addEventListener("audiotools:translate:block_input", onBlockInput);
-   window.addEventListener("audiotools:translate:system_prompt", onSystemPrompt);
+   window.addEventListener("audiotools:translation:block_stream", onBlockStream);
+   window.addEventListener("audiotools:translation:block_input", onBlockInput);
+   window.addEventListener("audiotools:translation:system_prompt", onSystemPrompt);
 
    onDestroy(() => {
-      window.removeEventListener("audiotools:translate:step", onStepEvent);
-      window.removeEventListener("audiotools:translate:work_info_stream", onWorkInfoStream);
-      window.removeEventListener("audiotools:translate:title_stream", onTitleStream);
-      window.removeEventListener("audiotools:translate:work_info", onWorkInfoFinal);
-      window.removeEventListener("audiotools:translate:title", onTitleFinal);
-      window.removeEventListener("audiotools:translate:lines", onLinesProgress);
-      window.removeEventListener("audiotools:translate:queue_started", onQueueStarted);
+      window.removeEventListener("audiotools:translation:step", onStepEvent);
+      window.removeEventListener("audiotools:translation:work_info_stream", onWorkInfoStream);
+      window.removeEventListener("audiotools:translation:title_stream", onTitleStream);
+      window.removeEventListener("audiotools:translation:work_info", onWorkInfoFinal);
+      window.removeEventListener("audiotools:translation:title", onTitleFinal);
+      window.removeEventListener("audiotools:translation:lines", onLinesProgress);
+      window.removeEventListener("audiotools:translation:queue_started", onQueueStarted);
       window.removeEventListener("audiotools:file", onFileTiming);
-      window.removeEventListener("audiotools:translate:block_stream", onBlockStream);
-      window.removeEventListener("audiotools:translate:block_input", onBlockInput);
-      window.removeEventListener("audiotools:translate:system_prompt", onSystemPrompt);
+      window.removeEventListener("audiotools:translation:block_stream", onBlockStream);
+      window.removeEventListener("audiotools:translation:block_input", onBlockInput);
+      window.removeEventListener("audiotools:translation:system_prompt", onSystemPrompt);
    });
 
    const finished = $derived(!progress.running && progress.success !== null);
