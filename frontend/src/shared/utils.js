@@ -27,3 +27,18 @@ export function formatElapsed(seconds) {
   if (m > 0) return `${m}m ${s}s`
   return `${s}s`
 }
+
+export async function copyText(text) {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    // Sin permiso de portapapeles (o sin API): fallback con un textarea temporal.
+    const ta = document.createElement('textarea')
+    ta.value = text
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+  }
+}
