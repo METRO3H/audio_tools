@@ -72,7 +72,6 @@
       {fileInfos}
       systemPrompt={run.systemPrompt}
       sections={run.systemPromptSections}
-      streamLogs={run.fileStreamLogs}
       inputLogs={run.fileInputLogs}
       onClose={() => (viewer.showPromptModal = false)}
    />

@@ -4,6 +4,7 @@
  * Fija lo que la vista HACE hoy, para poder partirla en componentes sin cambiar su comportamiento.
  * Los tests marcados "(comportamiento actual)" documentan cosas que parecen bugs: si un cambio
  * futuro las arregla a propósito, hay que actualizar el test, no es una regresión.
+ * (Los dos del modal de prompt — vista raw y origen de Contexto/Bloque — ya se arreglaron.)
  */
 import { render, screen, cleanup, fireEvent, within } from "@testing-library/svelte";
 import { tick } from "svelte";
@@ -62,6 +63,11 @@ function modalButton(heading, name) {
 const modalOf = (heading) => screen.getByRole("heading", { name: heading }).closest(".rounded-2xl");
 
 const BLOCKS_OUT = "═══ Bloque 1/2 ═══\n1: hola\n\n═══ Bloque 2/2 ═══\n2: chau";
+// Lo enviado al modelo (core/translation/runner.py): un encabezado por bloque; el bloque 1 no
+// tiene contexto previo y el 2 sí.
+const INPUT_2 =
+   "═══ Bloque 1/2 ═══\n[Block to translate]:\n1: uno\n\n" +
+   "═══ Bloque 2/2 ═══\n[Previous translated context]:\nCTX-B2\n\n[Block to translate]:\n2: dos";
 const BLOCKS_IN =
    "═══ Bloque 1/2 ═══\n[Previous translated context]:\nCTX-IN\n\n[Block to translate]:\nBLK-IN";
 
@@ -396,35 +402,68 @@ describe("modal de prompt completo", () => {
       expect(modalButton(H, "Ver formateado")).toBeTruthy();
    });
 
-   it("(comportamiento actual) la vista raw escribe \\n\\n como texto literal", async () => {
+   it("la vista raw separa con saltos de línea reales, igual que 'Copiar todo'", async () => {
+      await emit("block_input", { file_index: 0, text: INPUT_2 });
       const H = /Prompt completo/;
       await click(modalButton(H, "Ver raw"));
-      expect(modalOf(H).textContent).toContain("FULL\\n\\n");
+      const raw = modalOf(H).querySelector("pre").textContent;
+      expect(raw).toBe("FULL\n\n[Block to translate]:\n1: uno");
+      expect(raw).not.toContain("\\n"); // ni barra + n como texto
    });
 
-   it("(comportamiento actual) Contexto y Bloque leen del log de la pestaña de stream, que arranca en Output", async () => {
-      await emit("block_input", { file_index: 0, text: BLOCKS_IN });
+   it("Contexto y Bloque leen el input aunque la pestaña de stream sea Output (la de por defecto)", async () => {
+      await emit("block_input", { file_index: 0, text: INPUT_2 });
       await emit("block_stream", { file_index: 0, text: BLOCKS_OUT });
       const H = /Prompt completo/;
       await click(modalButton(H, "Contexto"));
       expect(modalOf(H).textContent).toContain("(No hay contexto)");
       await click(modalButton(H, "Bloque"));
-      expect(modalOf(H).textContent).toContain("═══ Bloque 1/2 ═══");
+      expect(modalOf(H).querySelector("pre").textContent).toBe("1: uno");
    });
 
-   it("(comportamiento actual) tras elegir Input en un modal de stream, Contexto y Bloque leen el input", async () => {
-      await emit("block_input", { file_index: 0, text: BLOCKS_IN });
-      await click(modalButton(/Prompt completo/, "✕"));
+   it("Contexto y Bloque son los del bloque elegido, no los del primero", async () => {
+      await emit("block_input", { file_index: 0, text: INPUT_2 });
+      await emit("block_stream", { file_index: 0, text: BLOCKS_OUT });
+      const H = /Prompt completo/;
+      await click(modalButton(H, "✕"));
       await click(screen.getByRole("button", { name: /Traducción/ }));
       await click(screen.getByText("a.srt"));
-      await click(within(modalOf("Stream — a.srt")).getByRole("button", { name: "Input" }));
+      await click(within(modalOf("Stream — a.srt")).getByRole("button", { name: "Bloque 2" }));
       await click(within(modalOf("Stream — a.srt")).getByRole("button", { name: "✕" }));
       await click(screen.getByRole("button", { name: "Prompt" }));
+      expect(screen.getByRole("heading", { name: /Prompt completo — a\.srt · Bloque 2/ })).toBeTruthy();
+      await click(modalButton(H, "Contexto"));
+      expect(modalOf(H).querySelector("pre").textContent).toBe("CTX-B2");
+      await click(modalButton(H, "Bloque"));
+      expect(modalOf(H).querySelector("pre").textContent).toContain("2: dos");
+   });
+
+   it("Contexto y Bloque son los del archivo elegido en el modal de todos los archivos", async () => {
+      await emit("block_input", { file_index: 0, text: INPUT_2 });
+      await emit("block_input", {
+         file_index: 1,
+         text: "═══ Bloque 1/1 ═══\n[Previous translated context]:\nCTX-B-FILE\n\n[Block to translate]:\n1: otro",
+      });
+      await emit("block_stream", { file_index: 1, text: "═══ Bloque 1/1 ═══\n1: other" });
+      const H = /Prompt completo/;
+      await click(modalButton(H, "✕"));
+      await click(screen.getByRole("button", { name: /Traducción/ }));
+      await click(screen.getByTitle("Ver el stream del modelo para todos los archivos"));
+      const all = modalOf("Stream — todos los archivos");
+      await click(within(all).getByRole("button", { name: "b.srt" }));
+      await click(within(all).getByRole("button", { name: "✕" }));
+      await click(screen.getByRole("button", { name: "Prompt" }));
+      expect(screen.getByRole("heading", { name: /Prompt completo — b\.srt · Bloque 1/ })).toBeTruthy();
+      await click(modalButton(H, "Contexto"));
+      expect(modalOf(H).querySelector("pre").textContent).toBe("CTX-B-FILE");
+   });
+
+   it("un bloque que todavía no se envió muestra los avisos de vacío", async () => {
       const H = /Prompt completo/;
       await click(modalButton(H, "Contexto"));
-      expect(modalOf(H).textContent).toContain("CTX-IN");
+      expect(modalOf(H).textContent).toContain("(No hay contexto)");
       await click(modalButton(H, "Bloque"));
-      expect(modalOf(H).textContent).toContain("BLK-IN");
+      expect(modalOf(H).textContent).toContain("(No hay bloque)");
    });
 
    it("Copiar todo copia el prompt del sistema más el mensaje del usuario", async () => {
@@ -432,5 +471,13 @@ describe("modal de prompt completo", () => {
       Object.assign(navigator, { clipboard: { writeText } });
       await click(modalButton(/Prompt completo/, "Copiar todo"));
       expect(writeText).toHaveBeenCalledWith("FULL\n\n");
+   });
+
+   it("Copiar todo incluye lo enviado al modelo para el bloque elegido", async () => {
+      await emit("block_input", { file_index: 0, text: INPUT_2 });
+      const writeText = vi.fn().mockResolvedValue();
+      Object.assign(navigator, { clipboard: { writeText } });
+      await click(modalButton(/Prompt completo/, "Copiar todo"));
+      expect(writeText).toHaveBeenCalledWith("FULL\n\n[Block to translate]:\n1: uno");
    });
 });

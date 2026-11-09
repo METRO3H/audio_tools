@@ -7,16 +7,22 @@
     * (contexto previo y bloque a traducir), en pestañas, o todo junto en bruto.
     *
     * Las secciones llegan ya separadas del backend (audiotools:translation:system_prompt ·
-    * sections). El mensaje del usuario sale del log que dejaron elegido los modales de stream
-    * (archivo, bloque y pestaña Input/Output del `viewer` compartido — ver streamViewer.svelte.js).
+    * sections). El mensaje del usuario es lo que se le ENVIÓ al modelo para el bloque elegido: sale
+    * siempre del log de input (nunca del output), del archivo y el bloque que dejaron elegidos los
+    * modales de stream en el `viewer` compartido (ver streamViewer.svelte.js) — la pestaña
+    * Input/Output de esos modales no influye acá.
     */
    import Modal from "@shared/ui/Modal.svelte";
    import { copyText } from "@shared/utils.js";
-   import { extractContext, extractBlock } from "@translate/srt/srtStreamParsing.js";
+   import { parseBlocks, extractContext, extractBlock } from "@translate/srt/srtStreamParsing.js";
 
-   let { viewer, fileInfos = [], systemPrompt = "", sections, streamLogs, inputLogs, onClose } = $props();
+   let { viewer, fileInfos = [], systemPrompt = "", sections, inputLogs, onClose } = $props();
 
-   const userMessage = $derived(viewer.currentLog(viewer.selectedFileIndexAll, inputLogs, streamLogs));
+   // Todo lo enviado para el bloque elegido: el primer intento y, si hubo, los reintentos
+   // ("[reintento]", "[último intento N]"). "" si ese bloque todavía no se envió.
+   const userMessage = $derived(
+      parseBlocks(inputLogs[viewer.selectedFileIndexAll] ?? "")[viewer.selectedBlockIndex]?.content ?? "",
+   );
 
    // Una definición por pestaña; `text` es lo que muestra y copia.
    const tabs = $derived([
@@ -83,10 +89,9 @@
             </div>
          </div>
       {:else}
-         <!-- Vista raw: todo concatenado. Los "\n\n" son TEXTO LITERAL (no saltos de línea): es
-              lo que hacía la vista antes de partirse, fijado por TranslateProcessingView.test.js. -->
+         <!-- Vista raw: todo concatenado, igual a lo que copia "Copiar todo". -->
          <div class="flex-1 flex flex-col min-h-0">
-            <pre class={PRE_CLASS} style={PRE_STYLE}>{systemPrompt}\n\n{userMessage}</pre>
+            <pre class={PRE_CLASS} style={PRE_STYLE}>{systemPrompt + "\n\n" + userMessage}</pre>
          </div>
       {/if}
    </div>
