@@ -146,3 +146,17 @@ def test_generate_text_returns_stripped_text_and_streams_full_text():
     out = mgr.generate_text("SYS", "user", on_stream=lambda tokens, text: seen.append(text))
     assert out == "Work info here"
     assert seen[-1] == "  Work info here  "
+
+
+def test_a_retry_that_is_still_untranslated_does_not_overwrite_the_previous_result():
+    # Un reintento solo pisa lo que ahora SÍ pasa la validación; si sigue mal, queda el
+    # resultado anterior (translate_block, tramo contiguo).
+    bad = "1: Good morning to you all\n2: Konnichiwa minna\n3: Thank you very much indeed"
+    mgr, _ = manager([bad, "2: Arigatou gozaimasu"])
+    result, _stats = mgr.translate_block(LINES, "", "SYS", temperature=0.3, source_language="japanese")
+    assert texts(result)[2] == "Konnichiwa minna"
+
+
+def test_translate_texts_retry_still_untranslated_keeps_previous_result():
+    mgr, _ = manager(["0: Konnichiwa minna", "0: Arigatou gozaimasu", "0: Arigatou gozaimasu"])
+    assert mgr.translate_texts(["あ"], "SYS") == ["Konnichiwa minna"]

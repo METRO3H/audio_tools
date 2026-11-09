@@ -5,11 +5,12 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from core.translation.model_manager import ModelManager, TranslationBackend
+from core.translation.base_runner import BaseTranslationRunner
+from core.translation.model_manager import TranslationBackend
 from core.translation import prompts
 
 
-class ChaptersTranslateRunner:
+class ChaptersTranslateRunner(BaseTranslationRunner):
     """
     Traduce los títulos de los chapters embebidos en una cola de archivos de audio/video. NO
     escribe nada en disco — eso es trabajo de ChaptersAction.apply (core/translation/
@@ -23,20 +24,10 @@ class ChaptersTranslateRunner:
     """
 
     def __init__(self, backend: TranslationBackend | None = None) -> None:
-        self._manager = ModelManager(backend=backend)
-        self._cancelled = False
+        super().__init__(backend)
         self._was_cancelled = False
 
     # ── API pública ──────────────────────────────────────────────────────
-
-    def list_models(self) -> list[str]:
-        return self._manager.list_models()
-
-    def unload(self) -> None:
-        self._manager.unload()
-
-    def cancel(self) -> None:
-        self._cancelled = True
 
     def translate_queue(
         self,

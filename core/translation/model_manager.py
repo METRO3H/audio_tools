@@ -110,6 +110,65 @@ class LocalLlamaBackend:
         )
 
 
+def _merge_retried(result: dict, reasons: dict, retried: dict, ids: list) -> list:
+    """
+    Aplica el resultado de un reintento SOLO a los ids que ahora pasan untranslated_reason
+    (los que ya estaban bien en el intento anterior no se tocan, aunque el reintento — a más
+    temperatura — los haya regenerado distinto). Actualiza `reasons` con el motivo vigente de
+    cada id y devuelve los que SIGUEN mal.
+    """
+    for i in ids:
+        reason = untranslated_reason(retried[i])
+        if reason is None:
+            result[i] = retried[i]
+        reasons[i] = reason
+    return [i for i in ids if reasons[i] is not None]
+
+
+class _CallRecorder:
+    """
+    Una llamada al modelo con el historial acumulado para los modales de stream/input.
+
+    on_stream recibe, en cada emisión, el historial COMPLETO — intento normal + reintentos,
+    cada uno separado y tagueado — no solo lo que genera la sub-llamada actual, así un reintento
+    no pisa lo que ya se vio. on_input hace lo mismo con lo que se MANDA al modelo. `stats`
+    acumula model_calls y tokens_generated (translate_texts no los usa).
+    """
+
+    def __init__(self, manager, system_prompt, on_stream, on_input) -> None:
+        self._manager = manager
+        self._system_prompt = system_prompt
+        self._on_stream = on_stream
+        self._on_input = on_input
+        self._committed: list[str] = []
+        self._committed_input: list[str] = []
+        self.stats = {"model_calls": 0, "tokens_generated": 0}
+
+    def call(self, items, ctx, temp, tag=None, line_progress=None, is_retry=False):
+        def stream_cb(tokens, text):
+            live = f"[{tag}]\n{text}" if tag else text
+            self._on_stream(tokens, "\n\n".join(self._committed + [live]))
+
+        def input_cb(user_message):
+            labeled = f"[{tag}]\n{user_message}" if tag else user_message
+            self._committed_input.append(labeled)
+            self._on_input("\n\n".join(self._committed_input))
+
+        res, tokens = self._manager._call_model(
+            items, ctx, self._system_prompt, temp,
+            on_stream=stream_cb if self._on_stream else None,
+            on_line_progress=line_progress,
+            on_input=input_cb if self._on_input else None,
+            is_retry=is_retry,
+        )
+        self.stats["model_calls"] += 1
+        self.stats["tokens_generated"] += tokens
+        if self._on_stream:
+            final_text = "\n".join(f"{i}: {t}" for i, t in res.items())
+            self._committed.append(f"[{tag}]\n{final_text}" if tag else final_text)
+        return res
+
+
 class ModelManager:
     """
     Arma bloques de subtitulos, reintentos, y traduccion de textos
@@ -359,29 +418,8 @@ class ModelManager:
                 if on_retry_log:
                     on_retry_log(msg)
 
-            committed: list[str] = []
-            committed_input: list[str] = []
-
-            def run_call(items, ctx, temp, tag=None, is_retry=False):
-                def stream_cb(tokens, text):
-                    live = f"[{tag}]\n{text}" if tag else text
-                    on_stream(tokens, "\n\n".join(committed + [live]))
-
-                def input_cb(user_message):
-                    labeled = f"[{tag}]\n{user_message}" if tag else user_message
-                    committed_input.append(labeled)
-                    on_input("\n\n".join(committed_input))
-
-                res, _tokens = self._call_model(
-                    items, ctx, system_prompt, temp,
-                    on_stream=stream_cb if on_stream else None,
-                    on_input=input_cb if on_input else None,
-                    is_retry=is_retry,
-                )
-                if on_stream:
-                    final_text = "\n".join(f"{i}: {t}" for i, t in res.items())
-                    committed.append(f"[{tag}]\n{final_text}" if tag else final_text)
-                return res
+            recorder = _CallRecorder(self, system_prompt, on_stream, on_input)
+            run_call = recorder.call
 
             items = {i: t for i, t in enumerate(texts)}
             result = run_call(items, "", temperature)
@@ -396,12 +434,7 @@ class ModelManager:
                     retry_items, "", min(temperature + 0.15, 1.0),
                     tag="reintento", is_retry=True,
                 )
-                for i in bad_ids:
-                    reason = untranslated_reason(retried[i])
-                    if reason is None:
-                        result[i] = retried[i]
-                    reasons[i] = reason
-                bad_ids = [i for i in bad_ids if reasons[i] is not None]
+                bad_ids = _merge_retried(result, reasons, retried, bad_ids)
 
             for i in bad_ids:
                 log(f"'{items[i]}' (id {i}) sigue sin traducir ({reasons[i]}) — último intento aislado...")
@@ -409,11 +442,8 @@ class ModelManager:
                     {i: items[i]}, "", min(temperature + 0.3, 1.0),
                     tag=f"último intento {i}", is_retry=True,
                 )
-                reason = untranslated_reason(single[i])
-                if reason is None:
-                    result[i] = single[i]
-                else:
-                    log(f"'{items[i]}' (id {i}) no se pudo traducir ({reason}) — se deja el texto original")
+                if _merge_retried(result, reasons, single, [i]):
+                    log(f"'{items[i]}' (id {i}) no se pudo traducir ({reasons[i]}) — se deja el texto original")
 
             return [result[i] for i in range(len(texts))]
 
@@ -509,33 +539,9 @@ class ModelManager:
                 if on_retry_log:
                     on_retry_log(msg)
 
-            committed: list[str] = []
-            committed_input: list[str] = []
-            call_stats = {"model_calls": 0, "tokens_generated": 0}
-
-            def run_call(items, ctx, temp, tag=None, line_progress=None, is_retry=False):
-                def stream_cb(tokens, text):
-                    live = f"[{tag}]\n{text}" if tag else text
-                    on_stream(tokens, "\n\n".join(committed + [live]))
-
-                def input_cb(user_message):
-                    labeled = f"[{tag}]\n{user_message}" if tag else user_message
-                    committed_input.append(labeled)
-                    on_input("\n\n".join(committed_input))
-
-                res, tokens = self._call_model(
-                    items, ctx, system_prompt, temp,
-                    on_stream=stream_cb if on_stream else None,
-                    on_line_progress=line_progress,
-                    on_input=input_cb if on_input else None,
-                    is_retry=is_retry,
-                )
-                call_stats["model_calls"] += 1
-                call_stats["tokens_generated"] += tokens
-                if on_stream:
-                    final_text = "\n".join(f"{i}: {t}" for i, t in res.items())
-                    committed.append(f"[{tag}]\n{final_text}" if tag else final_text)
-                return res
+            recorder = _CallRecorder(self, system_prompt, on_stream, on_input)
+            run_call = recorder.call
+            call_stats = recorder.stats
 
             order = [l["id"] for l in lines]
             originals = {l["id"]: l["text"] for l in lines}
@@ -573,12 +579,7 @@ class ModelManager:
                 # Solo se pisan las lineas que estaban mal — las que ya
                 # estaban bien en el 1er intento no se tocan, aunque el
                 # reintento (a mas temperatura) las haya regenerado distinto.
-                for i in bad_ids:
-                    reason = untranslated_reason(retried[i])
-                    if reason is None:
-                        result[i] = retried[i]
-                    reasons[i] = reason
-                bad_ids = [i for i in bad_ids if reasons[i] is not None]
+                bad_ids = _merge_retried(result, reasons, retried, bad_ids)
             else:
                 # Reintentar tramos contiguos de malas
                 bad_set = set(bad_ids)
@@ -614,11 +615,7 @@ class ModelManager:
                         run_items, run_context, retry_temp,
                         tag=f"reintento tramo {run[0]}-{run[-1]}", is_retry=True,
                     )
-                    for i in run:
-                        reason = untranslated_reason(retried[i])
-                        if reason is None:
-                            result[i] = retried[i]
-                        reasons[i] = reason
+                    _merge_retried(result, reasons, retried, run)
 
                 bad_ids = [i for i in order if reasons[i] is not None]
 

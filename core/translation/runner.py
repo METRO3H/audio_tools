@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Callable
 
 import config
-from core.translation.model_manager import ModelManager, TranslationBackend
+from core.translation.base_runner import BaseTranslationRunner
+from core.translation.model_manager import TranslationBackend
 from core.translation import prompts
 from core.translation import stats_db
 from core.translation.prompts import build_system_prompt
@@ -21,7 +22,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-class TranslateRunner:
+class TranslateRunner(BaseTranslationRunner):
     """
     Pipeline de traduccion sobre archivos .srt, con el modelo cargado en
     el propio proceso (sin server, sin cliente remoto).
@@ -72,20 +73,10 @@ class TranslateRunner:
     """
 
     def __init__(self, backend: TranslationBackend | None = None) -> None:
-        self._manager = ModelManager(backend=backend)
-        self._cancelled = False
+        super().__init__(backend)
         self._was_cancelled = False  # Indica si la cola fue cancelada
 
     # — API publica —
-
-    def list_models(self) -> list[str]:
-        return self._manager.list_models()
-
-    def unload(self) -> None:
-        self._manager.unload()
-
-    def cancel(self) -> None:
-        self._cancelled = True
 
     def run_queue(
         self,

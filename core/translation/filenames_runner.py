@@ -7,10 +7,11 @@ from typing import Callable
 import config
 from core.filenames import sanitize_name
 from core.lang_detect import detect_language
-from core.translation.model_manager import ModelManager, TranslationBackend
+from core.translation.base_runner import BaseTranslationRunner
+from core.translation.model_manager import TranslationBackend
 from core.translation import prompts
 
-class FilenameTranslateRunner:
+class FilenameTranslateRunner(BaseTranslationRunner):
     """
     Traduce nombres de archivo y de carpeta dentro de una carpeta, de forma
     recursiva.
@@ -29,32 +30,9 @@ class FilenameTranslateRunner:
     """
 
     def __init__(self, backend: TranslationBackend | None = None) -> None:
-        self._manager = ModelManager(backend=backend)
-        self._cancelled = False
+        super().__init__(backend)
 
     # ── API publica ──────────────────────────────────────────────────────
-
-    def list_models(self) -> list[str]:
-        return self._manager.list_models()
-
-    def unload(self) -> None:
-        self._manager.unload()
-
-    def cancel(self) -> None:
-        self._cancelled = True
-
-    @property
-    def cancelled(self) -> bool:
-        """
-        Si cancel() se llamó durante la última translate_preview(). Existe porque, a diferencia
-        de TranslateRunner/ChaptersTranslateRunner, translate_preview() no tiene un callback de
-        "terminó, y así terminó" — cuando se cancela, simplemente retorna la lista con los
-        nombres SIN traducir (mismo shape que un éxito real), así que sin esto el caller no
-        tiene forma de distinguir "nada necesitaba traducción" de "se canceló a mitad de camino"
-        (bug real: antes de esto, cancelar durante filenames mostraba una vista previa "exitosa"
-        con todos los nombres iguales a los originales, sin avisar que en realidad se canceló).
-        """
-        return self._cancelled
 
     def scan(self, folder: Path) -> list[dict]:
         """
